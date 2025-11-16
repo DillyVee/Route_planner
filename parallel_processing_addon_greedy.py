@@ -201,74 +201,101 @@ def _greedy_route_cluster(graph, required_edges, seg_idxs, start_node):
     """
     Simple greedy nearest-neighbor routing for a cluster.
     Much faster than Hungarian algorithm.
-    
+
     Algorithm:
     1. Start at current location
     2. Repeatedly choose nearest unvisited segment
     3. Drive to it and traverse it
     4. Repeat until all segments visited
-    
-    Returns: (path, total_distance, unreachable_segments)
+
+    Returns: (path_coords, total_distance, unreachable_segments)
     """
-    path = [start_node]
+    from math import radians, cos, sin, asin, sqrt
+
+    def haversine(a, b):
+        """Calculate distance between two lat/lon points in meters"""
+        lat1, lon1 = a
+        lat2, lon2 = b
+        lat1, lon1, lat2, lon2 = map(radians, (lat1, lon1, lat2, lon2))
+        dlat = lat2 - lat1
+        dlon = lon2 - lon1
+        aa = sin(dlat/2)**2 + cos(lat1)*cos(lat2)*sin(dlon/2)**2
+        c = 2*asin(sqrt(aa))
+        return 6371000 * c
+
+    def path_length(coords):
+        """Calculate total path length in meters"""
+        if len(coords) < 2:
+            return 0.0
+        return sum(haversine(coords[i], coords[i+1]) for i in range(len(coords)-1))
+
+    def append_path(total_path, new_coords):
+        """Append path coordinates, avoiding duplicates"""
+        if not new_coords:
+            return total_path
+        if total_path and len(new_coords) > 0 and total_path[-1] == new_coords[0]:
+            new_coords = new_coords[1:]
+        total_path.extend(new_coords)
+        return total_path
+
+    path = []
     remaining = set(seg_idxs)
     current = start_node
     total_dist = 0.0
     unreachable = []
-    
+
     while remaining:
         # Find nearest remaining segment
         best_seg_idx = None
         best_approach_dist = float('inf')
-        best_segment_start = None
-        
+        best_approach_path = None
+
         for seg_idx in remaining:
             # required_edges is a 4-tuple: (start, end, coords, idx)
             segment_start = required_edges[seg_idx][0]
-            segment_end = required_edges[seg_idx][1]
-            
+
             # Calculate distance from current location to segment start
             try:
-                approach_dist = graph.get_shortest_path_length(current, segment_start)
-                
+                approach_path, approach_dist = graph.shortest_path(current, segment_start)
+
                 if approach_dist < best_approach_dist:
                     best_approach_dist = approach_dist
                     best_seg_idx = seg_idx
-                    best_segment_start = segment_start
+                    best_approach_path = approach_path
             except:
                 # Segment unreachable from current position
                 continue
-        
+
         # If no reachable segment found, mark remaining as unreachable
         if best_seg_idx is None:
             unreachable.extend(list(remaining))
             break
-        
+
         # Route to the best segment
         segment_start = required_edges[best_seg_idx][0]
         segment_end = required_edges[best_seg_idx][1]
-        
+        segment_coords = required_edges[best_seg_idx][2]
+
         try:
             # Get path from current location to segment start
-            if current != segment_start:
-                approach_path = graph.get_shortest_path(current, segment_start)
-                path.extend(approach_path[1:])  # Skip duplicate node
+            if best_approach_path:
+                path = append_path(path, best_approach_path)
                 total_dist += best_approach_dist
-            
+
             # Traverse the segment itself
-            segment_length = graph.get_edge_weight(segment_start, segment_end)
-            path.append(segment_end)
+            path = append_path(path, segment_coords)
+            segment_length = path_length(segment_coords)
             total_dist += segment_length
-            
+
             # Update position
             current = segment_end
             remaining.remove(best_seg_idx)
-            
+
         except Exception as e:
             # Segment became unreachable
             unreachable.append(best_seg_idx)
             remaining.remove(best_seg_idx)
-    
+
     return path, total_dist, unreachable
 
 
