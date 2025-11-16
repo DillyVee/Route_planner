@@ -814,37 +814,56 @@ def greedy_cluster_order(ids, centroids):
     
     return order
 
-def two_opt_order(order, centroids, max_iter=1000):
-    """Improve cluster order with 2-opt"""
+def two_opt_order(order, centroids, max_iter=100):
+    """
+    Improve cluster order with 2-opt.
+    OPTIMIZED: Reduced iterations, early stopping, delta calculations.
+    """
     n = len(order)
     if n <= 2:
         return order
-    
+
     def tour_length(o):
         return sum(haversine(centroids[o[i]], centroids[o[i+1]]) for i in range(len(o)-1))
-    
-    improved = True
-    it = 0
+
+    def delta_2opt(tour, i, j):
+        """Calculate delta for 2-opt swap without full recalculation"""
+        # Cost of current edges
+        old_cost = haversine(centroids[tour[i-1]], centroids[tour[i]]) + \
+                   haversine(centroids[tour[j]], centroids[tour[j+1]])
+        # Cost of new edges after reversing tour[i:j+1]
+        new_cost = haversine(centroids[tour[i-1]], centroids[tour[j]]) + \
+                   haversine(centroids[tour[i]], centroids[tour[j+1]])
+        return new_cost - old_cost
+
     best = order[:]
     best_len = tour_length(best)
-    
-    while improved and it < max_iter:
+    no_improvement_count = 0
+    max_no_improvement = 5  # Early stop after 5 iterations without improvement
+
+    for it in range(max_iter):
         improved = False
-        it += 1
-        
+
         for i in range(1, n-2):
             for j in range(i+1, n-1):
-                new = best[:i] + best[i:j+1][::-1] + best[j+1:]
-                nl = tour_length(new)
-                
-                if nl + 1e-6 < best_len:
-                    best = new
-                    best_len = nl
+                # Calculate delta instead of full tour length
+                delta = delta_2opt(best, i, j)
+
+                if delta < -1e-6:  # Improvement found
+                    best = best[:i] + best[i:j+1][::-1] + best[j+1:]
+                    best_len += delta
                     improved = True
+                    no_improvement_count = 0
                     break
             if improved:
                 break
-    
+
+        if not improved:
+            no_improvement_count += 1
+            if no_improvement_count >= max_no_improvement:
+                print(f"  2-opt converged after {it+1} iterations")
+                break
+
     return best
 
 def write_mobile_gpx(full_coords, leg_breaks, leg_names, leg_distances, filename='mobile_route.gpx', avg_speed_kmh=30.0):
@@ -1044,7 +1063,8 @@ def full_pipeline(kml_path, cluster_method='auto', gx=10, gy=10, k_clusters=40,
                   use_ortools_for_cluster_order=True, allow_return_on_completed=True,
                   avg_speed_kmh=None, output_gpx='final_mobile_route.gpx',
                   output_html='route_preview.html', progress_callback=None,
-                  use_osm_speeds=True, overpass_cache_file='overpass_cache.json'):
+                  use_osm_speeds=True, overpass_cache_file='overpass_cache.json',
+                  use_2opt=True):
     """
     Complete pipeline from KML to optimized route.
     
@@ -1094,8 +1114,12 @@ def full_pipeline(kml_path, cluster_method='auto', gx=10, gy=10, k_clusters=40,
     
     print("\n[6/8] Optimizing cluster order with 2-opt...")
     centroids = {cid: centroid_of_cluster(clusters[cid], segments) for cid in order}
-    improved_order = two_opt_order(order, centroids) if len(order) > 2 else order
-    print(f"  ✓ Cluster visit order: {len(improved_order)} clusters")
+    if use_2opt and len(order) > 2:
+        improved_order = two_opt_order(order, centroids)
+        print(f"  ✓ Cluster visit order: {len(improved_order)} clusters")
+    else:
+        improved_order = order
+        print(f"  ✓ Skipped 2-opt (use_2opt={use_2opt}), using greedy order: {len(improved_order)} clusters")
     
     print("\n[7/8] Routing segments within clusters...")
 
@@ -1545,7 +1569,8 @@ class RoutingWorker(QThread):
                 output_html=self.params['output_html'],
                 progress_callback=progress_callback,
                 use_osm_speeds=self.params.get('use_osm_speeds', True),
-                overpass_cache_file=self.params.get('overpass_cache_file', 'overpass_cache.json')
+                overpass_cache_file=self.params.get('overpass_cache_file', 'overpass_cache.json'),
+                use_2opt=self.params.get('use_2opt', False)
             )
             
             builtins.print = original_print
@@ -1908,10 +1933,14 @@ class RouteOptimizer(QMainWindow):
         self.use_osm_speeds.setChecked(True)
         opt_layout.addWidget(self.use_osm_speeds)
 
+        self.use_2opt = QCheckBox('⚡ Use 2-opt optimization (uncheck for faster processing)')
+        self.use_2opt.setChecked(False)  # Default OFF for speed
+        opt_layout.addWidget(self.use_2opt)
+
         self.allow_return = QCheckBox('🔄 Allow return on completed segments (flexible routing)')
         self.allow_return.setChecked(True)
         opt_layout.addWidget(self.allow_return)
-        
+
         opt_group.setLayout(opt_layout)
         layout.addWidget(opt_group)
         
@@ -1919,8 +1948,9 @@ class RouteOptimizer(QMainWindow):
             "💡 <b>OPTIMIZATION TIPS:</b><br><br>"
             "• <b>OR-Tools:</b> Provides optimal cluster ordering using TSP solver<br>"
             "• <b>OSM Speeds:</b> Real-world speed limits for accurate ETAs<br>"
+            "• <b>2-opt:</b> Refines cluster order (OPTIMIZED: faster convergence)<br>"
             "• <b>Return Allowed:</b> More flexible routing on two-way roads<br>"
-            "• Processing time scales with number of segments and clusters"
+            "• <b>Speed tip:</b> Disable 2-opt or reduce cluster count for faster processing"
         )
         info_label.setWordWrap(True)
         info_label.setStyleSheet("""
@@ -1986,7 +2016,8 @@ class RouteOptimizer(QMainWindow):
             'output_gpx': self.gpx_output.text(),
             'output_html': self.html_output.text(),
             'use_osm_speeds': self.use_osm_speeds.isChecked(),
-            'overpass_cache_file': 'overpass_cache.json'
+            'overpass_cache_file': 'overpass_cache.json',
+            'use_2opt': self.use_2opt.isChecked()
         }
         
         self.progress_text.clear()
