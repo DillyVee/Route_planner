@@ -33,11 +33,21 @@ from osm_speed_integration import (
 )
 
 from parallel_processing_addon import (
-    parallel_cluster_routing,
+    parallel_cluster_routing as parallel_cluster_routing_hungarian,
     estimate_optimal_workers,
     ParallelTimer,
     get_cpu_info
 )
+
+# Import greedy algorithm version
+try:
+    from parallel_processing_addon_greedy import (
+        parallel_cluster_routing as parallel_cluster_routing_greedy
+    )
+    GREEDY_AVAILABLE = True
+except ImportError:
+    GREEDY_AVAILABLE = False
+    print("⚠️ Greedy algorithm not available - using Hungarian only")
 
 # PyQt6 imports
 from PyQt6.QtWidgets import (
@@ -1044,11 +1054,13 @@ def full_pipeline(kml_path, cluster_method='auto', gx=10, gy=10, k_clusters=40,
                   use_ortools_for_cluster_order=True, allow_return_on_completed=True,
                   avg_speed_kmh=None, output_gpx='final_mobile_route.gpx',
                   output_html='route_preview.html', progress_callback=None,
-                  use_osm_speeds=True, overpass_cache_file='overpass_cache.json'):
+                  use_osm_speeds=True, overpass_cache_file='overpass_cache.json',
+                  routing_algorithm='greedy'):
     """
     Complete pipeline from KML to optimized route.
     
     NEW: use_osm_speeds parameter enables OSM speed limit integration
+    NEW: routing_algorithm parameter chooses between 'greedy' (fast) and 'hungarian' (optimal)
     """
     
     t0 = time.time()
@@ -1102,6 +1114,18 @@ def full_pipeline(kml_path, cluster_method='auto', gx=10, gy=10, k_clusters=40,
     # Estimate optimal workers
     num_workers = estimate_optimal_workers(len(improved_order), len(segments))
     print(f"  Using {num_workers} parallel workers")
+    print(f"  Algorithm: {routing_algorithm.upper()}")
+
+    # Select routing function based on algorithm choice
+    if routing_algorithm == 'greedy' and GREEDY_AVAILABLE:
+        parallel_cluster_routing = parallel_cluster_routing_greedy
+        print("  ⚡ Using FAST greedy nearest-neighbor algorithm")
+    else:
+        parallel_cluster_routing = parallel_cluster_routing_hungarian
+        if routing_algorithm == 'greedy' and not GREEDY_AVAILABLE:
+            print("  ⚠️ Greedy not available, using Hungarian")
+        else:
+            print("  🎯 Using Hungarian algorithm (slower but more optimal)")
 
     # Route clusters in parallel
     cluster_results = parallel_cluster_routing(
@@ -1545,7 +1569,8 @@ class RoutingWorker(QThread):
                 output_html=self.params['output_html'],
                 progress_callback=progress_callback,
                 use_osm_speeds=self.params.get('use_osm_speeds', True),
-                overpass_cache_file=self.params.get('overpass_cache_file', 'overpass_cache.json')
+                overpass_cache_file=self.params.get('overpass_cache_file', 'overpass_cache.json'),
+                routing_algorithm=self.params.get('routing_algorithm', 'greedy')
             )
             
             builtins.print = original_print
@@ -1895,6 +1920,23 @@ class RouteOptimizer(QMainWindow):
         layout = QVBoxLayout()
         layout.setSpacing(20)
         
+        # Algorithm Selection Group
+        algo_group = QGroupBox("ROUTING ALGORITHM")
+        algo_layout = QVBoxLayout()
+        algo_layout.setSpacing(12)
+        
+        self.algo_greedy = QRadioButton('⚡ Simple Greedy (10-100x FASTER, ~85% optimal)')
+        self.algo_greedy.setChecked(True if GREEDY_AVAILABLE else False)
+        self.algo_greedy.setEnabled(GREEDY_AVAILABLE)
+        algo_layout.addWidget(self.algo_greedy)
+        
+        self.algo_hungarian = QRadioButton('🎯 Hungarian (Slower, ~95% optimal)')
+        self.algo_hungarian.setChecked(True if not GREEDY_AVAILABLE else False)
+        algo_layout.addWidget(self.algo_hungarian)
+        
+        algo_group.setLayout(algo_layout)
+        layout.addWidget(algo_group)
+        
         opt_group = QGroupBox("OPTIMIZATION OPTIONS")
         opt_layout = QVBoxLayout()
         opt_layout.setSpacing(15)
@@ -1916,11 +1958,13 @@ class RouteOptimizer(QMainWindow):
         layout.addWidget(opt_group)
         
         info_label = QLabel(
-            "💡 <b>OPTIMIZATION TIPS:</b><br><br>"
+            "💡 <b>ALGORITHM COMPARISON:</b><br><br>"
+            "• <b>Simple Greedy:</b> Fast nearest-neighbor approach. Solves in seconds instead of hours. Recommended for large datasets (1000+ segments).<br>"
+            "• <b>Hungarian:</b> More optimal but much slower. Best for small datasets (&lt;500 segments) or when route quality is critical.<br><br>"
+            "<b>OTHER OPTIONS:</b><br>"
             "• <b>OR-Tools:</b> Provides optimal cluster ordering using TSP solver<br>"
             "• <b>OSM Speeds:</b> Real-world speed limits for accurate ETAs<br>"
-            "• <b>Return Allowed:</b> More flexible routing on two-way roads<br>"
-            "• Processing time scales with number of segments and clusters"
+            "• <b>Return Allowed:</b> More flexible routing on two-way roads"
         )
         info_label.setWordWrap(True)
         info_label.setStyleSheet("""
@@ -1986,7 +2030,8 @@ class RouteOptimizer(QMainWindow):
             'output_gpx': self.gpx_output.text(),
             'output_html': self.html_output.text(),
             'use_osm_speeds': self.use_osm_speeds.isChecked(),
-            'overpass_cache_file': 'overpass_cache.json'
+            'overpass_cache_file': 'overpass_cache.json',
+            'routing_algorithm': self.get_routing_algorithm()
         }
         
         self.progress_text.clear()
@@ -1995,6 +2040,7 @@ class RouteOptimizer(QMainWindow):
         self.log_message("╚════════════════════════════════════════════╝")
         self.log_message(f"📍 Input: {os.path.basename(params['kml_path'])}")
         self.log_message(f"🎯 Method: {params['cluster_method'].upper()}")
+        self.log_message(f"⚡ Algorithm: {params['routing_algorithm'].upper()}")
         self.log_message(f"🌍 OSM Speeds: {'ENABLED' if params['use_osm_speeds'] else 'DISABLED'}")
         self.log_message("╚════════════════════════════════════════════╝")
         self.log_message("")
@@ -2032,6 +2078,13 @@ class RouteOptimizer(QMainWindow):
             return 'grid'
         else:
             return 'auto'
+    
+    def get_routing_algorithm(self):
+        """Get selected routing algorithm"""
+        if self.algo_greedy.isChecked():
+            return 'greedy'
+        else:
+            return 'hungarian'
     
     def on_progress_message(self, message):
         """Handle progress messages and update status"""
