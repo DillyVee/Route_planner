@@ -212,23 +212,24 @@ def _route_cluster_worker(args):
     from Route_Planner import greedy_arc_route_with_hungarian
     
     try:
-        # ✅ FIXED: No segment_callback parameter
-        cluster_path, cluster_m = greedy_arc_route_with_hungarian(
-            graph, 
-            required_edges, 
+        # ✅ FIXED: No segment_callback parameter, and unpack all 3 return values
+        cluster_path, cluster_m, unreachable = greedy_arc_route_with_hungarian(
+            graph,
+            required_edges,
             seg_idxs,
             start_node=start_node,
             allow_return_on_completed=allow_return,
             distance_cache=None
         )
-        
+
         return {
             'success': True,
             'cluster_idx': cluster_idx,
             'cid': cid,
             'path': cluster_path,
             'distance': cluster_m,
-            'num_segments': len(seg_idxs)
+            'num_segments': len(seg_idxs),
+            'unreachable': unreachable
         }
     except Exception as e:
         import traceback
