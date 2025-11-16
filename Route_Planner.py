@@ -2068,20 +2068,19 @@ class RouteOptimizer(QMainWindow):
         """Update cluster routing progress bar"""
         if not self.cluster_progress_bar.isVisible():
             self.cluster_progress_bar.setVisible(True)
-            # ✅ Set range to 0-10000 for precision (allows 2 decimal places)
-            self.cluster_progress_bar.setRange(0, 10000)
-            self.cluster_progress_bar.setMaximum(10000)
-        
-        # ✅ Calculate percentage with decimal precision
-        percentage_float = (current / total) * 100 if total > 0 else 0.0
-        percentage_value = int(percentage_float * 100)  # Scale to 0-10000 range
-        
-        # ✅ Update with scaled percentage value
-        self.cluster_progress_bar.setValue(percentage_value)
-        # ✅ Custom format string with float percentage
-        self.cluster_progress_bar.setFormat(f"Cluster {current}/{total} ({percentage_float:.2f}%)")
+            # Set range to actual cluster count for accurate progress
+            self.cluster_progress_bar.setRange(0, total)
+            self.cluster_progress_bar.setMaximum(total)
+
+        # Calculate percentage for display
+        percentage = (current / total) * 100 if total > 0 else 0.0
+
+        # Update progress bar with actual current value
+        self.cluster_progress_bar.setValue(current)
+        # Custom format string with percentage
+        self.cluster_progress_bar.setFormat(f"Cluster {current}/{total} ({percentage:.2f}%)")
         self.update_status(f"🚗 Routing cluster {current}/{total}...")
-        
+
         QApplication.processEvents()
 
         # Calculate and show time estimate
