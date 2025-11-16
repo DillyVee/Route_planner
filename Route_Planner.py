@@ -706,6 +706,47 @@ def greedy_arc_route_with_hungarian(graph, required_edges, seg_idxs, start_node=
         if not pcoords:
             return
         if total_path and total_path[-1] == pcoords[0]:
+            pcoords = pcoords[1:]
+        total_path.extend(pcoords)
+        total_m += path_length(pcoords)
+
+    # Main routing loop
+    while remaining:
+        best_seg = None
+        best_dist = float('inf')
+        best_path = None
+
+        # Find nearest unvisited segment
+        for seg_idx in remaining:
+            seg_start = required_edges[seg_idx][0]
+            path, dist = graph.shortest_path(cur, seg_start)
+
+            if dist < best_dist:
+                best_dist = dist
+                best_seg = seg_idx
+                best_path = path
+
+        if best_seg is None:
+            # No reachable segments
+            unreachable.extend(list(remaining))
+            break
+
+        # Move to segment and traverse it
+        if best_path:
+            append_path(best_path)
+
+        seg_coords = required_edges[best_seg][2]
+        append_path(seg_coords)
+
+        cur = required_edges[best_seg][1]
+        remaining.remove(best_seg)
+        processed += 1
+
+    # Add connecting paths
+    for path in connecting_paths:
+        append_path(path)
+
+    return total_path, total_m, unreachable
 
 def centroid_of_cluster(cluster_idx_list, segments):
     """Calculate centroid of a cluster"""
