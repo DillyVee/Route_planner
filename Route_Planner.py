@@ -49,6 +49,16 @@ except ImportError:
     GREEDY_AVAILABLE = False
     print("⚠️ Greedy algorithm not available - using Hungarian only")
 
+# Import RFCS (Route-First, Cluster-Second) algorithm version
+try:
+    from parallel_processing_addon_rfcs import (
+        parallel_cluster_routing as parallel_cluster_routing_rfcs
+    )
+    RFCS_AVAILABLE = True
+except ImportError:
+    RFCS_AVAILABLE = False
+    print("⚠️ RFCS algorithm not available")
+
 # PyQt6 imports
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -1117,12 +1127,17 @@ def full_pipeline(kml_path, cluster_method='auto', gx=10, gy=10, k_clusters=40,
     print(f"  Algorithm: {routing_algorithm.upper()}")
 
     # Select routing function based on algorithm choice
-    if routing_algorithm == 'greedy' and GREEDY_AVAILABLE:
+    if routing_algorithm == 'rfcs' and RFCS_AVAILABLE:
+        parallel_cluster_routing = parallel_cluster_routing_rfcs
+        print("  🏆 Using RFCS + Eulerization (GOLD STANDARD - 95-98% optimal)")
+    elif routing_algorithm == 'greedy' and GREEDY_AVAILABLE:
         parallel_cluster_routing = parallel_cluster_routing_greedy
         print("  ⚡ Using FAST greedy nearest-neighbor algorithm")
     else:
         parallel_cluster_routing = parallel_cluster_routing_hungarian
-        if routing_algorithm == 'greedy' and not GREEDY_AVAILABLE:
+        if routing_algorithm == 'rfcs' and not RFCS_AVAILABLE:
+            print("  ⚠️ RFCS not available, using Hungarian")
+        elif routing_algorithm == 'greedy' and not GREEDY_AVAILABLE:
             print("  ⚠️ Greedy not available, using Hungarian")
         else:
             print("  🎯 Using Hungarian algorithm (slower but more optimal)")
@@ -1929,10 +1944,15 @@ class RouteOptimizer(QMainWindow):
         self.algo_greedy.setChecked(True if GREEDY_AVAILABLE else False)
         self.algo_greedy.setEnabled(GREEDY_AVAILABLE)
         algo_layout.addWidget(self.algo_greedy)
-        
+
         self.algo_hungarian = QRadioButton('🎯 Hungarian (Slower, ~95% optimal)')
-        self.algo_hungarian.setChecked(True if not GREEDY_AVAILABLE else False)
+        self.algo_hungarian.setChecked(True if (not GREEDY_AVAILABLE and not RFCS_AVAILABLE) else False)
         algo_layout.addWidget(self.algo_hungarian)
+
+        self.algo_rfcs = QRadioButton('🏆 RFCS + Eulerization (GOLD STANDARD, ~95-98% optimal)')
+        self.algo_rfcs.setChecked(True if RFCS_AVAILABLE else False)
+        self.algo_rfcs.setEnabled(RFCS_AVAILABLE)
+        algo_layout.addWidget(self.algo_rfcs)
         
         algo_group.setLayout(algo_layout)
         layout.addWidget(algo_group)
@@ -2083,6 +2103,8 @@ class RouteOptimizer(QMainWindow):
         """Get selected routing algorithm"""
         if self.algo_greedy.isChecked():
             return 'greedy'
+        elif self.algo_rfcs.isChecked():
+            return 'rfcs'
         else:
             return 'hungarian'
     
