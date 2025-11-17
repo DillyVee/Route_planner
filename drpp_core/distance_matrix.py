@@ -18,6 +18,7 @@ logger = get_logger(__name__)
 # Try to import numpy for large matrices
 try:
     import numpy as np
+
     NUMPY_AVAILABLE = True
 except ImportError:
     NUMPY_AVAILABLE = False
@@ -34,6 +35,7 @@ class MatrixStats:
         memory_bytes: Approximate memory usage in bytes
         storage_type: Type of storage used ('dict' or 'numpy')
     """
+
     num_nodes: int
     num_paths: int
     memory_bytes: int
@@ -81,16 +83,12 @@ class DistanceMatrix:
         self.distance_matrix: Optional[Any] = None  # np.ndarray if numpy available
         self.path_matrix: Optional[Any] = None  # List[List[List[NodeID]]]
 
-        self.storage_type = 'numpy' if use_numpy else 'dict'
+        self.storage_type = "numpy" if use_numpy else "dict"
 
         logger.debug(f"DistanceMatrix initialized: storage={self.storage_type}, nodes={num_nodes}")
 
     def set(
-        self,
-        source_id: NodeID,
-        target_id: NodeID,
-        distance: Distance,
-        path_ids: List[NodeID]
+        self, source_id: NodeID, target_id: NodeID, distance: Distance, path_ids: List[NodeID]
     ) -> None:
         """Store shortest path information.
 
@@ -134,9 +132,9 @@ class DistanceMatrix:
         """
         if self.use_numpy and self.distance_matrix is not None:
             val = self.distance_matrix[source_id, target_id]
-            return float(val) if val != np.inf else float('inf')
+            return float(val) if val != np.inf else float("inf")
         else:
-            return self.distances.get((source_id, target_id), float('inf'))
+            return self.distances.get((source_id, target_id), float("inf"))
 
     def get_path_ids(self, source_id: NodeID, target_id: NodeID) -> List[NodeID]:
         """Get shortest path as sequence of node IDs.
@@ -154,11 +152,7 @@ class DistanceMatrix:
         """
         return self.path_node_ids.get((source_id, target_id), [])
 
-    def get_path_coords(
-        self,
-        source_id: NodeID,
-        target_id: NodeID
-    ) -> List[Coordinate]:
+    def get_path_coords(self, source_id: NodeID, target_id: NodeID) -> List[Coordinate]:
         """Get shortest path as sequence of coordinates.
 
         Args:
@@ -174,11 +168,7 @@ class DistanceMatrix:
             ...     print(f"({lat}, {lon})")
         """
         path_ids = self.get_path_ids(source_id, target_id)
-        return [
-            self.id_to_coords[nid]
-            for nid in path_ids
-            if nid in self.id_to_coords
-        ]
+        return [self.id_to_coords[nid] for nid in path_ids if nid in self.id_to_coords]
 
     def has_path(self, source_id: NodeID, target_id: NodeID) -> bool:
         """Check if a path exists between two nodes.
@@ -195,7 +185,7 @@ class DistanceMatrix:
             ...     print("Path exists!")
         """
         if self.use_numpy and self.distance_matrix is not None:
-            return self.distance_matrix[source_id, target_id] != np.inf
+            return bool(self.distance_matrix[source_id, target_id] != np.inf)
         else:
             return (source_id, target_id) in self.distances
 
@@ -205,11 +195,7 @@ class DistanceMatrix:
             return
 
         logger.debug(f"Initializing NumPy matrix: {self.num_nodes}x{self.num_nodes}")
-        self.distance_matrix = np.full(
-            (self.num_nodes, self.num_nodes),
-            np.inf,
-            dtype=np.float32
-        )
+        self.distance_matrix = np.full((self.num_nodes, self.num_nodes), np.inf, dtype=np.float32)
 
     def get_stats(self) -> MatrixStats:
         """Get statistics about memory usage and content.
@@ -225,9 +211,7 @@ class DistanceMatrix:
             # NumPy storage
             num_paths = len(self.path_node_ids)
             matrix_bytes = self.distance_matrix.nbytes
-            paths_bytes = sum(
-                sys.getsizeof(path) for path in self.path_node_ids.values()
-            )
+            paths_bytes = sum(sys.getsizeof(path) for path in self.path_node_ids.values())
             coords_bytes = sys.getsizeof(self.id_to_coords)
             total_bytes = matrix_bytes + paths_bytes + coords_bytes
 
@@ -235,7 +219,7 @@ class DistanceMatrix:
                 num_nodes=self.num_nodes or 0,
                 num_paths=num_paths,
                 memory_bytes=total_bytes,
-                storage_type='numpy'
+                storage_type="numpy",
             )
         else:
             # Dict storage
@@ -249,7 +233,7 @@ class DistanceMatrix:
                 num_nodes=len(self.id_to_coords),
                 num_paths=num_paths,
                 memory_bytes=total_bytes,
-                storage_type='dict'
+                storage_type="dict",
             )
 
 
@@ -257,7 +241,7 @@ def compute_distance_matrix(
     graph: Any,  # GraphInterface
     node_ids: Set[NodeID],
     id_to_coords: Dict[NodeID, Coordinate],
-    use_numpy: bool = False
+    use_numpy: bool = False,
 ) -> DistanceMatrix:
     """Compute all-pairs shortest paths for a set of nodes.
 
@@ -277,7 +261,7 @@ def compute_distance_matrix(
     Raises:
         ValueError: If graph doesn't implement dijkstra() method
     """
-    if not hasattr(graph, 'dijkstra'):
+    if not hasattr(graph, "dijkstra"):
         raise ValueError("Graph must implement dijkstra() method")
 
     num_nodes = len(node_ids)
@@ -321,7 +305,7 @@ def compute_distance_matrix(
                 total_pairs += 1
 
                 # Check if target is reachable
-                if distances[target_id] == float('inf'):
+                if distances[target_id] == float("inf"):
                     logger.debug(f"No path from {source_id} to {target_id}")
                     continue
 

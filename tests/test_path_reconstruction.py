@@ -4,17 +4,18 @@ Unit tests for path reconstruction module.
 Tests all sentinel value handling, edge cases, and error conditions.
 """
 
-import unittest
 import sys
 from pathlib import Path
 
-# Add parent directory to path
+# Add parent directory to path before importing drpp_core
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from drpp_core.path_reconstruction import (
+import unittest  # noqa: E402
+
+from drpp_core.path_reconstruction import (  # noqa: E402
     reconstruct_path,
     validate_path,
-    reconstruct_path_safe
+    reconstruct_path_safe,
 )
 
 
@@ -107,12 +108,7 @@ class TestPathReconstruction(unittest.TestCase):
         predecessors[0] = None
 
         # With custom max_iterations
-        path = reconstruct_path(
-            predecessors,
-            source_id=0,
-            target_id=500,
-            max_iterations=10
-        )
+        path = reconstruct_path(predecessors, source_id=0, target_id=500, max_iterations=10)
         self.assertEqual(path, [])  # Exceeded max iterations
 
 
@@ -180,5 +176,5 @@ class TestReconstructPathSafe(unittest.TestCase):
         self.assertIsNone(path)  # Cycle detected, returns None
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

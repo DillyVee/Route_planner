@@ -13,8 +13,8 @@ from logging.handlers import RotatingFileHandler
 
 
 # Default format for log messages
-DEFAULT_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-DETAILED_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
+DEFAULT_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+DETAILED_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s"
 
 
 def setup_logging(
@@ -23,7 +23,7 @@ def setup_logging(
     console: bool = True,
     detailed: bool = False,
     max_bytes: int = 10 * 1024 * 1024,  # 10 MB
-    backup_count: int = 5
+    backup_count: int = 5,
 ) -> logging.Logger:
     """Configure logging for DRPP solver.
 
@@ -43,7 +43,7 @@ def setup_logging(
         >>> logger.info("Starting DRPP solver")
     """
     # Get root logger for DRPP
-    logger = logging.getLogger('drpp_core')
+    logger = logging.getLogger("drpp_core")
     logger.setLevel(level)
     logger.handlers.clear()  # Remove any existing handlers
 
@@ -62,10 +62,7 @@ def setup_logging(
     if log_file is not None:
         log_file.parent.mkdir(parents=True, exist_ok=True)
         file_handler = RotatingFileHandler(
-            log_file,
-            maxBytes=max_bytes,
-            backupCount=backup_count,
-            encoding='utf-8'
+            log_file, maxBytes=max_bytes, backupCount=backup_count, encoding="utf-8"
         )
         file_handler.setLevel(level)
         file_handler.setFormatter(formatter)
@@ -90,7 +87,7 @@ def get_logger(name: str) -> logging.Logger:
         >>> logger = get_logger(__name__)
         >>> logger.debug("Processing cluster 5")
     """
-    return logging.getLogger(f'drpp_core.{name}')
+    return logging.getLogger(f"drpp_core.{name}")
 
 
 class LogTimer:
@@ -119,12 +116,14 @@ class LogTimer:
     def __enter__(self):
         """Start timing."""
         import time
+
         self.start_time = time.perf_counter()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Stop timing and log duration."""
         import time
+
         if self.start_time is not None:
             elapsed = time.perf_counter() - self.start_time
             self.logger.log(self.level, f"{self.operation}: {elapsed:.2f}s")
@@ -150,5 +149,8 @@ def log_exception(logger: logging.Logger, message: str, exc: Exception) -> None:
         ...     log_exception(logger, "Failed to process cluster", e)
     """
     import traceback
+
     logger.error(f"{message}: {str(exc)}")
-    logger.debug(f"Traceback:\n{''.join(traceback.format_exception(type(exc), exc, exc.__traceback__))}")
+    logger.debug(
+        f"Traceback:\n{''.join(traceback.format_exception(type(exc), exc, exc.__traceback__))}"
+    )

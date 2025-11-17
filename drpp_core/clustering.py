@@ -5,7 +5,7 @@ Supports DBSCAN, K-means, and grid-based clustering with automatic
 method selection based on data characteristics.
 """
 
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, cast
 from enum import Enum
 from math import radians, cos, sin, asin, sqrt
 from collections import defaultdict
@@ -17,8 +17,9 @@ logger = get_logger(__name__)
 
 # Try to import scikit-learn
 try:
-    from sklearn.cluster import DBSCAN, KMeans
+    from sklearn.cluster import DBSCAN, KMeans  # type: ignore[import-untyped]
     import numpy as np
+
     SKLEARN_AVAILABLE = True
 except ImportError:
     SKLEARN_AVAILABLE = False
@@ -27,6 +28,7 @@ except ImportError:
 
 class ClusteringMethod(Enum):
     """Available clustering methods."""
+
     DBSCAN = "dbscan"  # Density-based clustering (best for irregular shapes)
     KMEANS = "kmeans"  # Centroid-based clustering (best when K is known)
     GRID = "grid"  # Simple grid-based clustering (fallback, always available)
@@ -66,9 +68,7 @@ def haversine(coord1: Coordinate, coord2: Coordinate) -> float:
     return earth_radius * c
 
 
-def _analyze_geographic_span(
-    centroids: List[Coordinate]
-) -> Tuple[float, float, float]:
+def _analyze_geographic_span(centroids: List[Coordinate]) -> Tuple[float, float, float]:
     """Analyze geographic extent of points.
 
     Args:
@@ -87,11 +87,7 @@ def _analyze_geographic_span(
     return lat_span, lon_span, avg_lat
 
 
-def _dbscan_haversine(
-    centroids: List[Coordinate],
-    eps_km: float,
-    min_samples: int
-) -> List[int]:
+def _dbscan_haversine(centroids: List[Coordinate], eps_km: float, min_samples: int) -> List[int]:
     """DBSCAN with true haversine metric.
 
     Best for: Large geographic areas, high latitudes, global datasets
@@ -113,17 +109,13 @@ def _dbscan_haversine(
     X_radians = np.radians(centroids)
     eps_radians = eps_km / 6371.0  # Convert km to radians
 
-    db = DBSCAN(eps=eps_radians, min_samples=min_samples, metric='haversine')
+    db = DBSCAN(eps=eps_radians, min_samples=min_samples, metric="haversine")
     labels = db.fit_predict(X_radians)
 
-    return labels.tolist()
+    return cast(List[int], labels.tolist())
 
 
-def _dbscan_mercator(
-    centroids: List[Coordinate],
-    eps_km: float,
-    min_samples: int
-) -> List[int]:
+def _dbscan_mercator(centroids: List[Coordinate], eps_km: float, min_samples: int) -> List[int]:
     """DBSCAN with Mercator projection.
 
     Best for: Medium geographic areas at mid-latitudes
@@ -154,17 +146,14 @@ def _dbscan_mercator(
     X = np.array(centroids_mercator)
     eps_meters = eps_km * 1000.0
 
-    db = DBSCAN(eps=eps_meters, min_samples=min_samples, metric='euclidean')
+    db = DBSCAN(eps=eps_meters, min_samples=min_samples, metric="euclidean")
     labels = db.fit_predict(X)
 
-    return labels.tolist()
+    return cast(List[int], labels.tolist())
 
 
 def _dbscan_adjusted_eps(
-    centroids: List[Coordinate],
-    eps_km: float,
-    min_samples: int,
-    avg_lat: float
+    centroids: List[Coordinate], eps_km: float, min_samples: int, avg_lat: float
 ) -> List[int]:
     """DBSCAN with latitude-adjusted epsilon.
 
@@ -193,16 +182,14 @@ def _dbscan_adjusted_eps(
     eps_deg = eps_km / ((km_per_deg_lat + km_per_deg_lon) / 2.0)
 
     X = np.array(centroids)
-    db = DBSCAN(eps=eps_deg, min_samples=min_samples, metric='euclidean')
+    db = DBSCAN(eps=eps_deg, min_samples=min_samples, metric="euclidean")
     labels = db.fit_predict(X)
 
-    return labels.tolist()
+    return cast(List[int], labels.tolist())
 
 
 def _select_dbscan_method(
-    centroids: List[Coordinate],
-    eps_km: float,
-    min_samples: int
+    centroids: List[Coordinate], eps_km: float, min_samples: int
 ) -> List[int]:
     """Automatically select best DBSCAN method based on data.
 
@@ -222,10 +209,7 @@ def _select_dbscan_method(
     """
     lat_span, lon_span, avg_lat = _analyze_geographic_span(centroids)
 
-    logger.info(
-        f"Geographic span: {lat_span:.2f}° × {lon_span:.2f}° "
-        f"(avg lat: {avg_lat:.2f}°)"
-    )
+    logger.info(f"Geographic span: {lat_span:.2f}° × {lon_span:.2f}° " f"(avg lat: {avg_lat:.2f}°)")
 
     # Very large area - use grid instead
     if lat_span > 10.0 or lon_span > 10.0:
@@ -254,8 +238,7 @@ def _select_dbscan_method(
 
 
 def _process_labels(
-    labels: List[int],
-    handle_noise: bool = True
+    labels: List[int], handle_noise: bool = True
 ) -> Dict[ClusterID, List[SegmentIndex]]:
     """Convert sklearn labels to cluster dict.
 
@@ -280,9 +263,7 @@ def _process_labels(
             max_label = max(label for label in clusters.keys() if label != -1)
             new_cluster_id = max_label + 1
             clusters[new_cluster_id] = clusters.pop(-1)
-            logger.info(
-                f"Moved {noise_count} noise points to cluster {new_cluster_id}"
-            )
+            logger.info(f"Moved {noise_count} noise points to cluster {new_cluster_id}")
         else:
             # Remove noise
             clusters.pop(-1)
@@ -292,10 +273,7 @@ def _process_labels(
 
 
 def cluster_segments_dbscan(
-    segments: List[Dict],
-    eps_km: float = 5.0,
-    min_samples: int = 3,
-    handle_noise: bool = True
+    segments: List[Dict], eps_km: float = 5.0, min_samples: int = 3, handle_noise: bool = True
 ) -> ClusterResult:
     """Cluster segments using DBSCAN with automatic method selection.
 
@@ -321,8 +299,7 @@ def cluster_segments_dbscan(
     """
     if not SKLEARN_AVAILABLE:
         raise RuntimeError(
-            "scikit-learn required for DBSCAN clustering. "
-            "Install with: pip install scikit-learn"
+            "scikit-learn required for DBSCAN clustering. " "Install with: pip install scikit-learn"
         )
 
     logger.info(
@@ -333,10 +310,7 @@ def cluster_segments_dbscan(
     with LogTimer(logger, "DBSCAN clustering"):
         # Compute centroids
         centroids = [
-            (
-                (seg['start'][0] + seg['end'][0]) / 2.0,
-                (seg['start'][1] + seg['end'][1]) / 2.0
-            )
+            ((seg["start"][0] + seg["end"][0]) / 2.0, (seg["start"][1] + seg["end"][1]) / 2.0)
             for seg in segments
         ]
 
@@ -349,22 +323,12 @@ def cluster_segments_dbscan(
         # Count noise
         noise_count = sum(1 for label in labels if label == -1)
 
-    logger.info(
-        f"DBSCAN complete: {len(clusters)} clusters, "
-        f"{noise_count} noise points"
-    )
+    logger.info(f"DBSCAN complete: {len(clusters)} clusters, " f"{noise_count} noise points")
 
-    return ClusterResult(
-        clusters=clusters,
-        noise_count=noise_count,
-        method_used="dbscan_auto"
-    )
+    return ClusterResult(clusters=clusters, noise_count=noise_count, method_used="dbscan_auto")
 
 
-def cluster_segments_kmeans(
-    segments: List[Dict],
-    k_clusters: int = 40
-) -> ClusterResult:
+def cluster_segments_kmeans(segments: List[Dict], k_clusters: int = 40) -> ClusterResult:
     """Cluster segments using K-means.
 
     Args:
@@ -388,10 +352,7 @@ def cluster_segments_kmeans(
     with LogTimer(logger, "K-means clustering"):
         # Compute centroids
         centroids = [
-            (
-                (seg['start'][0] + seg['end'][0]) / 2.0,
-                (seg['start'][1] + seg['end'][1]) / 2.0
-            )
+            ((seg["start"][0] + seg["end"][0]) / 2.0, (seg["start"][1] + seg["end"][1]) / 2.0)
             for seg in segments
         ]
 
@@ -403,17 +364,11 @@ def cluster_segments_kmeans(
 
     logger.info(f"K-means complete: {len(clusters)} clusters")
 
-    return ClusterResult(
-        clusters=clusters,
-        noise_count=0,
-        method_used="kmeans"
-    )
+    return ClusterResult(clusters=clusters, noise_count=0, method_used="kmeans")
 
 
 def cluster_segments_grid(
-    segments: List[Dict],
-    grid_x: int = 10,
-    grid_y: int = 10
+    segments: List[Dict], grid_x: int = 10, grid_y: int = 10
 ) -> ClusterResult:
     """Cluster segments using simple grid-based method.
 
@@ -430,24 +385,17 @@ def cluster_segments_grid(
     Example:
         >>> result = cluster_segments_grid(segments, grid_x=8, grid_y=8)
     """
-    logger.info(
-        f"Clustering {len(segments)} segments with grid "
-        f"({grid_x}×{grid_y} cells)"
-    )
+    logger.info(f"Clustering {len(segments)} segments with grid " f"({grid_x}×{grid_y} cells)")
 
     # Handle empty segments
     if not segments:
         logger.warning("No segments to cluster")
-        return ClusterResult(
-            clusters={},
-            noise_count=0,
-            method_used="grid"
-        )
+        return ClusterResult(clusters={}, noise_count=0, method_used="grid")
 
     with LogTimer(logger, "Grid clustering"):
         # Compute centroids
-        lats = [(seg['start'][0] + seg['end'][0]) / 2.0 for seg in segments]
-        lons = [(seg['start'][1] + seg['end'][1]) / 2.0 for seg in segments]
+        lats = [(seg["start"][0] + seg["end"][0]) / 2.0 for seg in segments]
+        lons = [(seg["start"][1] + seg["end"][1]) / 2.0 for seg in segments]
 
         min_lat, max_lat = min(lats), max(lats)
         min_lon, max_lon = min(lons), max(lons)
@@ -459,8 +407,8 @@ def cluster_segments_grid(
         # Assign segments to grid cells
         clusters: Dict[int, List[int]] = {}
         for i, seg in enumerate(segments):
-            clat = (seg['start'][0] + seg['end'][0]) / 2.0
-            clon = (seg['start'][1] + seg['end'][1]) / 2.0
+            clat = (seg["start"][0] + seg["end"][0]) / 2.0
+            clon = (seg["start"][1] + seg["end"][1]) / 2.0
 
             # Compute grid cell indices
             ix = int((clon - min_lon) / lon_step) if lon_step > 0 else 0
@@ -476,17 +424,11 @@ def cluster_segments_grid(
 
     logger.info(f"Grid clustering complete: {len(clusters)} clusters")
 
-    return ClusterResult(
-        clusters=clusters,
-        noise_count=0,
-        method_used="grid"
-    )
+    return ClusterResult(clusters=clusters, noise_count=0, method_used="grid")
 
 
 def cluster_segments(
-    segments: List[Dict],
-    method: ClusteringMethod = ClusteringMethod.GRID,
-    **kwargs
+    segments: List[Dict], method: ClusteringMethod = ClusteringMethod.GRID, **kwargs
 ) -> ClusterResult:
     """Cluster road segments using specified method.
 
@@ -518,20 +460,15 @@ def cluster_segments(
     if method == ClusteringMethod.DBSCAN:
         return cluster_segments_dbscan(
             segments,
-            eps_km=kwargs.get('eps_km', 5.0),
-            min_samples=kwargs.get('min_samples', 3),
-            handle_noise=kwargs.get('handle_noise', True)
+            eps_km=kwargs.get("eps_km", 5.0),
+            min_samples=kwargs.get("min_samples", 3),
+            handle_noise=kwargs.get("handle_noise", True),
         )
     elif method == ClusteringMethod.KMEANS:
-        return cluster_segments_kmeans(
-            segments,
-            k_clusters=kwargs.get('k_clusters', 40)
-        )
+        return cluster_segments_kmeans(segments, k_clusters=kwargs.get("k_clusters", 40))
     elif method == ClusteringMethod.GRID:
         return cluster_segments_grid(
-            segments,
-            grid_x=kwargs.get('grid_x', 10),
-            grid_y=kwargs.get('grid_y', 10)
+            segments, grid_x=kwargs.get("grid_x", 10), grid_y=kwargs.get("grid_y", 10)
         )
     else:
         raise ValueError(f"Unknown clustering method: {method}")

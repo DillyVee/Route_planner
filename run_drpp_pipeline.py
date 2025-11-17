@@ -26,6 +26,7 @@ import sys
 from pathlib import Path
 from drpp_pipeline import DRPPPipeline
 
+
 def main():
     # Check arguments
     if len(sys.argv) < 2:
@@ -42,7 +43,7 @@ def main():
         sys.exit(1)
 
     kml_file = Path(sys.argv[1])
-    algorithm = sys.argv[2] if len(sys.argv) > 2 else 'v4'
+    algorithm = sys.argv[2] if len(sys.argv) > 2 else "v4"
 
     if not kml_file.exists():
         print(f"Error: KML file not found: {kml_file}")
@@ -61,8 +62,8 @@ def main():
         results = pipeline.run(
             kml_file=kml_file,
             algorithm=algorithm,
-            output_dir=Path('./output'),
-            output_formats=['html', 'geojson', 'svg']
+            output_dir=Path("./output"),
+            output_formats=["html", "geojson", "svg"],
         )
 
         print()
@@ -75,7 +76,7 @@ def main():
         print(f"   Coverage: {results['coverage']:.1f}%")
         print()
         print("📁 Output files:")
-        for fmt, path in results['output_files'].items():
+        for fmt, path in results["output_files"].items():
             print(f"   {fmt.upper():10s}: {path}")
         print()
         print("🌐 To view the interactive map, open the HTML file in your browser:")
@@ -89,9 +90,10 @@ def main():
         print("=" * 80)
         print(f"{type(e).__name__}: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

@@ -5,19 +5,16 @@ Uses ProcessPoolExecutor for better resource management compared to Pool.
 Precomputes distance matrices in parent process to avoid pickling full graph.
 """
 
-from typing import List, Dict, Tuple, Optional, Callable, Any
+from typing import List, Dict, Tuple, Optional, Callable, Any, Union
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 import multiprocessing
 import time
 
-from .types import (
-    Coordinate, NodeID, SegmentIndex, ClusterID,
-    PathResult, UnreachableSegment
-)
+from .types import Coordinate, NodeID, SegmentIndex, ClusterID, PathResult
 from .distance_matrix import DistanceMatrix, compute_distance_matrix
 from .greedy_router import greedy_route_cluster, NodeNormalizer
-from .logging_config import get_logger, LogTimer, log_exception
+from .logging_config import get_logger, LogTimer
 
 logger = get_logger(__name__)
 
@@ -39,6 +36,7 @@ class ClusterTask:
         start_node_id: Starting node ID
         enable_fallback: Whether to enable Dijkstra fallback
     """
+
     cluster_id: ClusterID
     cluster_index: int
     segment_indices: List[SegmentIndex]
@@ -65,6 +63,7 @@ class ClusterTaskResult:
         error_message: Error message if failed
         worker_id: ID of worker process
     """
+
     cluster_id: ClusterID
     cluster_index: int
     success: bool
@@ -94,6 +93,7 @@ def _route_cluster_worker(task: ClusterTask) -> ClusterTaskResult:
         rather than raising, to ensure the parent process can handle errors.
     """
     import os
+
     worker_id = os.getpid()
 
     try:
@@ -104,7 +104,9 @@ def _route_cluster_worker(task: ClusterTask) -> ClusterTaskResult:
             start_node = id_to_node.get(task.start_node_id)
         elif isinstance(id_to_node, list):
             try:
-                start_node = id_to_node[task.start_node_id] if task.start_node_id < len(id_to_node) else None
+                start_node = (
+                    id_to_node[task.start_node_id] if task.start_node_id < len(id_to_node) else None
+                )
             except (IndexError, TypeError):
                 start_node = None
         else:
@@ -121,7 +123,7 @@ def _route_cluster_worker(task: ClusterTask) -> ClusterTaskResult:
             start_node=start_node,
             distance_matrix=task.distance_matrix,
             normalizer=task.normalizer,
-            enable_fallback=task.enable_fallback
+            enable_fallback=task.enable_fallback,
         )
 
         return ClusterTaskResult(
@@ -133,15 +135,13 @@ def _route_cluster_worker(task: ClusterTask) -> ClusterTaskResult:
             segments_covered=result.segments_covered,
             segments_unreachable=result.segments_unreachable,
             computation_time=result.computation_time,
-            worker_id=worker_id
+            worker_id=worker_id,
         )
 
     except Exception as e:
         import traceback
-        logger.error(
-            f"Worker {worker_id} failed on cluster {task.cluster_id}: {e}",
-            exc_info=True
-        )
+
+        logger.error(f"Worker {worker_id} failed on cluster {task.cluster_id}: {e}", exc_info=True)
         return ClusterTaskResult(
             cluster_id=task.cluster_id,
             cluster_index=task.cluster_index,
@@ -152,7 +152,7 @@ def _route_cluster_worker(task: ClusterTask) -> ClusterTaskResult:
             segments_unreachable=len(task.segment_indices),
             computation_time=0.0,
             error_message=f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}",
-            worker_id=worker_id
+            worker_id=worker_id,
         )
 
 
@@ -161,7 +161,7 @@ def _precompute_cluster_tasks(
     required_edges: List[Tuple],
     clusters: Dict[ClusterID, List[SegmentIndex]],
     cluster_order: List[ClusterID],
-    start_node: Coordinate | NodeID
+    start_node: Union[Coordinate, NodeID],
 ) -> List[ClusterTask]:
     """Precompute distance matrices for all clusters in parent process.
 
@@ -221,7 +221,11 @@ def _precompute_cluster_tasks(
             if isinstance(normalizer_main.id_to_node, dict):
                 start_coord_val = normalizer_main.id_to_node.get(start_node_id)
             elif isinstance(normalizer_main.id_to_node, list):
-                start_coord_val = normalizer_main.id_to_node[start_node_id] if start_node_id < len(normalizer_main.id_to_node) else None
+                start_coord_val = (
+                    normalizer_main.id_to_node[start_node_id]
+                    if start_node_id < len(normalizer_main.id_to_node)
+                    else None
+                )
             else:
                 start_coord_val = None
             if start_coord_val:
@@ -229,13 +233,10 @@ def _precompute_cluster_tasks(
 
             # Compute distance matrix for this cluster
             try:
-                distance_matrix = compute_distance_matrix(
-                    graph, node_ids, id_to_coords
-                )
+                distance_matrix = compute_distance_matrix(graph, node_ids, id_to_coords)
             except Exception as e:
                 logger.error(
-                    f"Failed to compute matrix for cluster {cluster_id}: {e}",
-                    exc_info=True
+                    f"Failed to compute matrix for cluster {cluster_id}: {e}", exc_info=True
                 )
                 # Create empty matrix - worker will handle failure
                 distance_matrix = DistanceMatrix()
@@ -250,7 +251,7 @@ def _precompute_cluster_tasks(
                 distance_matrix=distance_matrix,
                 normalizer=normalizer_main,
                 start_node_id=start_node_id,
-                enable_fallback=False  # No graph in workers
+                enable_fallback=False,  # No graph in workers
             )
             tasks.append(task)
 
@@ -266,9 +267,9 @@ def parallel_cluster_routing(
     required_edges: List[Tuple],
     clusters: Dict[ClusterID, List[SegmentIndex]],
     cluster_order: List[ClusterID],
-    start_node: Coordinate | NodeID,
+    start_node: Union[Coordinate, NodeID],
     num_workers: Optional[int] = None,
-    progress_callback: Optional[Callable[[int, int], None]] = None
+    progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> List[PathResult]:
     """Route through clusters in parallel using ProcessPoolExecutor.
 
@@ -312,14 +313,11 @@ def parallel_cluster_routing(
     num_workers = min(num_workers, len(cluster_order))
 
     logger.info(
-        f"Starting parallel routing: {len(cluster_order)} clusters, "
-        f"{num_workers} workers"
+        f"Starting parallel routing: {len(cluster_order)} clusters, " f"{num_workers} workers"
     )
 
     # Phase 1: Precompute all distance matrices in parent process
-    tasks = _precompute_cluster_tasks(
-        graph, required_edges, clusters, cluster_order, start_node
-    )
+    tasks = _precompute_cluster_tasks(graph, required_edges, clusters, cluster_order, start_node)
 
     # Phase 2: Route clusters in parallel
     results: List[ClusterTaskResult] = []
@@ -331,10 +329,7 @@ def parallel_cluster_routing(
 
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
         # Submit all tasks
-        future_to_task = {
-            executor.submit(_route_cluster_worker, task): task
-            for task in tasks
-        }
+        future_to_task = {executor.submit(_route_cluster_worker, task): task for task in tasks}
 
         # Process results as they complete
         for future in as_completed(future_to_task):
@@ -346,9 +341,7 @@ def parallel_cluster_routing(
 
                 if not result.success:
                     failed += 1
-                    logger.error(
-                        f"Cluster {result.cluster_id} failed: {result.error_message}"
-                    )
+                    logger.error(f"Cluster {result.cluster_id} failed: {result.error_message}")
 
                 # Progress callback
                 if progress_callback is not None:
@@ -368,17 +361,19 @@ def parallel_cluster_routing(
                 logger.error(f"Future raised exception: {e}", exc_info=True)
                 task = future_to_task[future]
                 # Create failure result
-                results.append(ClusterTaskResult(
-                    cluster_id=task.cluster_id,
-                    cluster_index=task.cluster_index,
-                    success=False,
-                    path=[],
-                    distance=0.0,
-                    segments_covered=0,
-                    segments_unreachable=len(task.segment_indices),
-                    computation_time=0.0,
-                    error_message=str(e)
-                ))
+                results.append(
+                    ClusterTaskResult(
+                        cluster_id=task.cluster_id,
+                        cluster_index=task.cluster_index,
+                        success=False,
+                        path=[],
+                        distance=0.0,
+                        segments_covered=0,
+                        segments_unreachable=len(task.segment_indices),
+                        computation_time=0.0,
+                        error_message=str(e),
+                    )
+                )
                 failed += 1
 
     # Sort results by cluster index to maintain order
@@ -392,7 +387,7 @@ def parallel_cluster_routing(
             cluster_id=r.cluster_id,
             segments_covered=r.segments_covered,
             segments_unreachable=r.segments_unreachable,
-            computation_time=r.computation_time
+            computation_time=r.computation_time,
         )
         for r in results
     ]
@@ -417,9 +412,7 @@ def parallel_cluster_routing(
 
 
 def estimate_optimal_workers(
-    num_clusters: int,
-    num_segments: int,
-    avg_cluster_size: Optional[int] = None
+    num_clusters: int, num_segments: int, avg_cluster_size: Optional[int] = None
 ) -> int:
     """Estimate optimal number of worker processes.
 
