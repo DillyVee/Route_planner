@@ -98,7 +98,18 @@ def _route_cluster_worker(task: ClusterTask) -> ClusterTaskResult:
 
     try:
         # Reconstruct start node from ID
-        start_node = task.normalizer.id_to_node.get(task.start_node_id)
+        # Handle both dict and list for id_to_node (different graph implementations)
+        id_to_node = task.normalizer.id_to_node
+        if isinstance(id_to_node, dict):
+            start_node = id_to_node.get(task.start_node_id)
+        elif isinstance(id_to_node, list):
+            try:
+                start_node = id_to_node[task.start_node_id] if task.start_node_id < len(id_to_node) else None
+            except (IndexError, TypeError):
+                start_node = None
+        else:
+            start_node = None
+
         if start_node is None:
             raise ValueError(f"Invalid start node ID: {task.start_node_id}")
 
@@ -206,7 +217,15 @@ def _precompute_cluster_tasks(
 
             # Include global start node
             node_ids.add(start_node_id)
-            id_to_coords[start_node_id] = normalizer_main.id_to_node[start_node_id]
+            # Handle both dict and list for id_to_node
+            if isinstance(normalizer_main.id_to_node, dict):
+                start_coord_val = normalizer_main.id_to_node.get(start_node_id)
+            elif isinstance(normalizer_main.id_to_node, list):
+                start_coord_val = normalizer_main.id_to_node[start_node_id] if start_node_id < len(normalizer_main.id_to_node) else None
+            else:
+                start_coord_val = None
+            if start_coord_val:
+                id_to_coords[start_node_id] = start_coord_val
 
             # Compute distance matrix for this cluster
             try:
