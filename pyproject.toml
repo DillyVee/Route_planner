@@ -65,15 +65,8 @@ Documentation = "https://github.com/DillyVee/Route_planner/tree/main/docs"
 drpp-solve = "run_drpp_pipeline:main"
 
 [tool.setuptools]
+packages = ["drpp_core", "legacy"]
 py-modules = ["Route_Planner", "drpp_pipeline", "drpp_visualization", "run_drpp_pipeline", "osm_speed_integration"]
-
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["drpp_core*", "legacy*"]
-exclude = ["tests*", "docs*"]
-
-[tool.setuptools.package-data]
-drpp_core = ["py.typed"]
 
 [tool.black]
 line-length = 100

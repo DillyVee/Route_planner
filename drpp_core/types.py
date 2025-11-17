@@ -5,16 +5,16 @@ This module provides type aliases and dataclasses for type safety and clarity.
 All coordinate operations should use these types for consistency.
 """
 
-from typing import Tuple, List, Dict, Optional, NamedTuple, TypeAlias, Union
+from typing import Tuple, List, Dict, Optional, NamedTuple, Union
 from dataclasses import dataclass
 from enum import Enum
 
-# Type Aliases for clarity
-Coordinate: TypeAlias = Tuple[float, float]  # (latitude, longitude) in decimal degrees
-NodeID: TypeAlias = int  # Integer node identifier
-SegmentIndex: TypeAlias = int  # Index into required_edges list
-Distance: TypeAlias = float  # Distance in meters
-ClusterID: TypeAlias = int  # Cluster identifier
+# Type Aliases for clarity (Python 3.9+ compatible without TypeAlias)
+Coordinate = Tuple[float, float]  # (latitude, longitude) in decimal degrees
+NodeID = int  # Integer node identifier
+SegmentIndex = int  # Index into required_edges list
+Distance = float  # Distance in meters
+ClusterID = int  # Cluster identifier
 
 
 class PathResult(NamedTuple):
