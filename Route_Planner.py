@@ -748,8 +748,9 @@ def parallel_cluster_routing_v4_wrapper(
     first_seg_idx = clusters[first_cid][0]
     start_node = required_edges[first_seg_idx][0]
 
-    # Call V4 ON-DEMAND routing (much faster than matrix precomputation!)
-    results = parallel_cluster_routing_v4_ondemand(
+    # Call V4 routing with PARALLEL matrix precomputation
+    # Uses ProcessPoolExecutor to route multiple clusters simultaneously
+    results = parallel_cluster_routing_v4(
         graph=graph,
         required_edges=required_edges,
         clusters=clusters,
@@ -1325,9 +1326,9 @@ def full_pipeline(
     # PRIORITY: Use Production V4 for greedy routing (RECOMMENDED)
     if V4_AVAILABLE and routing_algorithm == "greedy":
         parallel_cluster_routing = parallel_cluster_routing_v4_wrapper
-        print("  🚀 Using Production V4 Greedy with ON-DEMAND mode (FASTEST)")
-        print("     ✅ 10-100x faster (bypasses matrix precomputation)")
-        print("     ✅ 10-50x memory reduction")
+        print("  🚀 Using Production V4 Greedy with PARALLEL processing (FAST)")
+        print("     ✅ Multi-core parallel cluster routing")
+        print("     ✅ 10-50x memory reduction vs legacy")
         print("     ✅ <0.1% crash rate")
     elif routing_algorithm == "rfcs" and RFCS_AVAILABLE:
         parallel_cluster_routing = parallel_cluster_routing_rfcs
