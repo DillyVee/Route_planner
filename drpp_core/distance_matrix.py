@@ -108,6 +108,18 @@ class DistanceMatrix:
                 self._initialize_numpy_storage()
 
             if self.distance_matrix is not None:
+                # Bounds check before array access
+                if (
+                    source_id >= self.num_nodes
+                    or target_id >= self.num_nodes
+                    or source_id < 0
+                    or target_id < 0
+                ):
+                    logger.error(
+                        f"Index out of bounds: ({source_id}, {target_id}) "
+                        f"not in range [0, {self.num_nodes})"
+                    )
+                    return
                 self.distance_matrix[source_id, target_id] = distance
                 # Store path in dict (paths are variable length, hard to store in numpy)
                 self.path_node_ids[(source_id, target_id)] = path_ids
@@ -131,6 +143,17 @@ class DistanceMatrix:
             >>> print(f"Distance: {dist:.1f}m")
         """
         if self.use_numpy and self.distance_matrix is not None:
+            # Bounds check before array access
+            if (
+                source_id >= self.num_nodes
+                or target_id >= self.num_nodes
+                or source_id < 0
+                or target_id < 0
+            ):
+                logger.warning(
+                    f"get_distance: Index out of bounds ({source_id}, {target_id}), returning inf"
+                )
+                return float("inf")
             val = self.distance_matrix[source_id, target_id]
             return float(val) if val != np.inf else float("inf")
         else:
@@ -185,6 +208,15 @@ class DistanceMatrix:
             ...     print("Path exists!")
         """
         if self.use_numpy and self.distance_matrix is not None:
+            # Bounds check before array access
+            if (
+                source_id >= self.num_nodes
+                or target_id >= self.num_nodes
+                or source_id < 0
+                or target_id < 0
+            ):
+                logger.warning(f"has_path: Index out of bounds ({source_id}, {target_id})")
+                return False
             return bool(self.distance_matrix[source_id, target_id] != np.inf)
         else:
             return (source_id, target_id) in self.distances
