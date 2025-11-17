@@ -1,0 +1,88 @@
+name: Bug Report
+description: Report a bug or unexpected behavior
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! Please fill out the form below.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear and concise description of what the bug is
+      placeholder: When I run the pipeline with a large KML file...
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to Reproduce
+      description: Steps to reproduce the behavior
+      placeholder: |
+        1. Load KML file with 10,000+ segments
+        2. Run `python run_drpp_pipeline.py file.kml v4`
+        3. Observe error...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What you expected to happen
+      placeholder: The pipeline should complete successfully and generate visualizations
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened (include error messages and stack traces)
+      placeholder: |
+        Traceback (most recent call last):
+          File "...", line X, in ...
+        ValueError: ...
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Your environment details
+      value: |
+        - OS: [e.g., Ubuntu 22.04, Windows 11, macOS 14]
+        - Python Version: [e.g., 3.11.5]
+        - Route Planner Version: [e.g., 4.0.0]
+        - Installation Method: [pip, git clone]
+      render: markdown
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Add any other context about the problem (sample KML files, screenshots, etc.)
+      placeholder: |
+        - Sample KML file is from MapPlus roadway survey
+        - Dataset has 11,060 segments
+        - Issue only occurs with V4 algorithm
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submission Checklist
+      options:
+        - label: I have searched existing issues to avoid duplicates
+          required: true
+        - label: I have included all relevant environment details
+          required: true
+        - label: I have included error messages and stack traces if applicable
+          required: true

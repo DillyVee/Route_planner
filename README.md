@@ -4,6 +4,9 @@
 
 [![Python](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![CI](https://github.com/DillyVee/Route_planner/workflows/CI/badge.svg)](https://github.com/DillyVee/Route_planner/actions)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
 ## Overview
 
@@ -211,7 +214,18 @@ python run_drpp_pipeline.py your_file.kml v4
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details on:
+
+- Setting up your development environment
+- Code style and standards
+- Testing requirements
+- Submitting pull requests
+
+Please read our [Code of Conduct](CODE_OF_CONDUCT.md) before contributing.
+
+## Security
+
+If you discover a security vulnerability, please see our [Security Policy](SECURITY.md) for responsible disclosure guidelines.
 
 ## License
 

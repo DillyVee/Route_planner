@@ -1,0 +1,48 @@
+# Development dependencies for Route Planner DRPP
+# Install with: pip install -r requirements_dev.txt
+
+# Include production requirements
+-r requirements_production.txt
+
+# Testing
+pytest>=7.4.0
+pytest-cov>=4.1.0
+pytest-xdist>=3.3.0  # Parallel test execution
+pytest-mock>=3.11.0
+coverage[toml]>=7.3.0
+
+# Code Quality
+black>=23.7.0
+flake8>=6.1.0
+flake8-docstrings>=1.7.0
+flake8-bugbear>=23.7.0
+isort>=5.12.0
+mypy>=1.5.0
+
+# Type Stubs
+types-setuptools>=68.0.0
+
+# Security
+safety>=2.3.0
+bandit>=1.7.5
+
+# Documentation
+sphinx>=7.1.0
+sphinx-rtd-theme>=1.3.0
+myst-parser>=2.0.0  # Markdown support for Sphinx
+
+# Development Tools
+pre-commit>=3.3.0
+ipython>=8.14.0
+ipdb>=0.13.13  # Debugging
+rope>=1.9.0  # Refactoring
+
+# Build Tools
+build>=0.10.0
+twine>=4.0.0
+wheel>=0.41.0
+setuptools>=68.0.0
+
+# Performance Profiling
+memory-profiler>=0.61.0
+line-profiler>=4.1.0
