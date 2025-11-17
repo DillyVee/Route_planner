@@ -34,7 +34,10 @@ from osm_speed_integration import enrich_segments_with_osm_speeds, snap_coord, s
 # Try to import Production V4 first (recommended)
 V4_AVAILABLE = False
 try:
-    from drpp_core import ClusteringMethod, PathResult
+    from drpp_core import (
+        ClusteringMethod,
+        PathResult,
+    )
     from drpp_core import cluster_segments as cluster_segments_v4
     from drpp_core import estimate_optimal_workers as estimate_optimal_workers_v4
     from drpp_core import parallel_cluster_routing as parallel_cluster_routing_v4
