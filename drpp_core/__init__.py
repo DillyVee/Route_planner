@@ -40,11 +40,11 @@ from .parallel_executor import (
     parallel_cluster_routing,
     sequential_cluster_routing_ondemand,
 )
+from .path_reconstruction import reconstruct_path
+from .types import ClusterResult, Coordinate, NodeID, PathResult, SegmentIndex
 
 # Backward compatibility alias
 parallel_cluster_routing_ondemand = sequential_cluster_routing_ondemand
-from .path_reconstruction import reconstruct_path
-from .types import ClusterResult, Coordinate, NodeID, PathResult, SegmentIndex
 
 __all__ = [
     # Types
