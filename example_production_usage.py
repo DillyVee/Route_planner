@@ -10,21 +10,19 @@ with all best practices:
 - Performance profiling
 """
 
-from pathlib import Path
 import logging
-from typing import List, Dict, Tuple
+from pathlib import Path
+from typing import Dict, List
 
 # Import production-ready modules
 from drpp_core import (
-    parallel_cluster_routing,
-    cluster_segments,
     ClusteringMethod,
-    estimate_optimal_workers,
-    PathResult,
     ClusterResult,
+    cluster_segments,
+    estimate_optimal_workers,
 )
-from drpp_core.logging_config import setup_logging, LogTimer
-from drpp_core.profiling import BenchmarkRunner, track_memory
+from drpp_core.logging_config import LogTimer, setup_logging
+from drpp_core.profiling import track_memory
 
 
 def main():
@@ -87,14 +85,13 @@ def main():
     # In production, use your actual segments
     dummy_segments = create_dummy_segments()
 
-    with LogTimer(logger, "Clustering"):
-        with track_memory("Clustering"):
-            result: ClusterResult = cluster_segments(
-                dummy_segments,
-                method=ClusteringMethod.GRID,  # Use GRID for demo (no sklearn needed)
-                grid_x=5,
-                grid_y=5,
-            )
+    with LogTimer(logger, "Clustering"), track_memory("Clustering"):
+        result: ClusterResult = cluster_segments(
+            dummy_segments,
+            method=ClusteringMethod.GRID,  # Use GRID for demo (no sklearn needed)
+            grid_x=5,
+            grid_y=5,
+        )
 
     logger.info(f"Created {len(result.clusters)} clusters")
     logger.info(f"Noise points: {result.noise_count}")

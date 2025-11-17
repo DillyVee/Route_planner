@@ -219,8 +219,16 @@ ignore = [
     "E501",  # line too long (handled by black)
     "B008",  # do not perform function calls in argument defaults
     "B905",  # zip without strict parameter
+    "UP006",  # Use builtin types for annotations (typing.List -> list) - Python 3.9+ compatible but not required
+    "UP035",  # Import from typing deprecated - Python 3.9+ compatible but not required
+    "N806",  # Variable in function should be lowercase - allow X for ML convention
 ]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]  # Allow unused imports in __init__.py
 "tests/*" = ["S101"]      # Allow assert in tests
+"Route_Planner.py" = ["E402", "F401", "B904", "F841", "N806", "B007"]  # GUI file - legacy code
+"osm_speed_integration.py" = ["UP006", "F401"]  # Legacy type hints
+"drpp_pipeline.py" = ["UP006", "F401"]  # Legacy type hints
+"drpp_visualization.py" = ["UP006"]  # Legacy type hints
+"run_drpp_pipeline.py" = ["UP006"]  # Legacy code

@@ -12,25 +12,25 @@ Usage:
     python route_planner_complete.py
 """
 
-import sys
-import os
-import xml.etree.ElementTree as ET
-from math import radians, cos, sin, asin, sqrt
 import heapq
-import time
 import json
-from collections import defaultdict, Counter
-from datetime import datetime, timedelta
+import os
+import sys
+import time
 import webbrowser
+import xml.etree.ElementTree as ET
+from collections import Counter, defaultdict
+from datetime import datetime, timedelta
+from math import asin, cos, radians, sin, sqrt
+
 from osm_speed_integration import (
     OverpassSpeedFetcher,
+    build_graph_with_time_weights,
     enrich_segments_with_osm_speeds,
     snap_coord,
     snap_coords_list,
-    build_graph_with_time_weights,
-    calculate_average_speed as calculate_average_speed_osm,
-    path_length_meters,
 )
+from osm_speed_integration import calculate_average_speed as calculate_average_speed_osm
 
 # ============================================================================
 # PARALLEL PROCESSING - PRODUCTION V4 (with fallbacks to legacy versions)
@@ -40,12 +40,12 @@ from osm_speed_integration import (
 V4_AVAILABLE = False
 try:
     from drpp_core import (
-        parallel_cluster_routing as parallel_cluster_routing_v4,
-        cluster_segments as cluster_segments_v4,
         ClusteringMethod,
-        estimate_optimal_workers as estimate_optimal_workers_v4,
         PathResult,
     )
+    from drpp_core import cluster_segments as cluster_segments_v4
+    from drpp_core import estimate_optimal_workers as estimate_optimal_workers_v4
+    from drpp_core import parallel_cluster_routing as parallel_cluster_routing_v4
     from drpp_core.logging_config import setup_logging as setup_drpp_logging
 
     V4_AVAILABLE = True
@@ -55,10 +55,10 @@ except ImportError:
 
 # Legacy imports (fallback)
 from legacy.parallel_processing_addon import (
-    parallel_cluster_routing as parallel_cluster_routing_hungarian,
     estimate_optimal_workers,
-    ParallelTimer,
-    get_cpu_info,
+)
+from legacy.parallel_processing_addon import (
+    parallel_cluster_routing as parallel_cluster_routing_hungarian,
 )
 
 # Import greedy algorithm version (legacy)
@@ -86,30 +86,29 @@ except ImportError:
         print("⚠️ RFCS algorithm not available")
 
 # PyQt6 imports
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtGui import QColor, QFont, QPalette, QTextCursor
 from PyQt6.QtWidgets import (
     QApplication,
-    QMainWindow,
-    QWidget,
-    QVBoxLayout,
+    QCheckBox,
+    QFileDialog,
+    QFrame,
+    QGroupBox,
     QHBoxLayout,
-    QPushButton,
     QLabel,
     QLineEdit,
-    QFileDialog,
-    QTextEdit,
-    QGroupBox,
-    QRadioButton,
-    QSpinBox,
-    QDoubleSpinBox,
-    QCheckBox,
-    QProgressBar,
-    QTabWidget,
+    QMainWindow,
     QMessageBox,
-    QFrame,
+    QProgressBar,
+    QPushButton,
+    QRadioButton,
     QScrollArea,
+    QSpinBox,
+    QTabWidget,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
 )
-from PyQt6.QtCore import QThread, pyqtSignal, Qt, QTimer, QPropertyAnimation, QEasingCurve
-from PyQt6.QtGui import QFont, QTextCursor, QPalette, QColor
 
 # Optional packages
 try:
@@ -196,11 +195,11 @@ def parse_kml(kml_path):
     except ET.ParseError as e:
         # If parsing fails, try to fix common XML issues
         print(f"  ⚠️ XML parsing error: {e}")
-        print(f"  🔧 Attempting to fix XML issues...")
+        print("  🔧 Attempting to fix XML issues...")
 
         try:
             # Read file and try to fix common issues
-            with open(kml_path, "r", encoding="utf-8", errors="ignore") as f:
+            with open(kml_path, encoding="utf-8", errors="ignore") as f:
                 content = f.read()
 
             # Fix common XML issues
@@ -216,7 +215,7 @@ def parse_kml(kml_path):
             from io import StringIO
 
             tree = ET.parse(StringIO(content))
-            print(f"  ✓ Successfully fixed and parsed KML")
+            print("  ✓ Successfully fixed and parsed KML")
 
         except Exception as fix_error:
             raise ValueError(f"Failed to parse KML file even after attempted fixes: {fix_error}")
@@ -488,7 +487,6 @@ def build_graph(segments, treat_unspecified_as_two_way=True):
     Build directed graph from segments.
     Now DELEGATES to time-based version and enriches with OSM roads.
     """
-    from osm_speed_integration import build_graph_with_time_weights
 
     print("  Building base graph from survey segments...")
     graph, required_edges = build_graph_with_time_weights(
@@ -514,7 +512,7 @@ def build_graph(segments, treat_unspecified_as_two_way=True):
     padding = 0.01
     bbox = (min_lat - padding, min_lon - padding, max_lat + padding, max_lon + padding)
 
-    print(f"  Fetching OSM connecting roads in bbox...")
+    print("  Fetching OSM connecting roads in bbox...")
     print(f"    Lat: {min_lat:.4f} to {max_lat:.4f}")
     print(f"    Lon: {min_lon:.4f} to {max_lon:.4f}")
 
@@ -524,7 +522,7 @@ def build_graph(segments, treat_unspecified_as_two_way=True):
 
         if osm_ways:
             print(f"  ✓ Found {len(osm_ways)} OSM road segments")
-            print(f"  Adding OSM roads to graph for routing (not as survey segments)...")
+            print("  Adding OSM roads to graph for routing (not as survey segments)...")
 
             osm_edges_added = 0
 
@@ -578,11 +576,11 @@ def build_graph(segments, treat_unspecified_as_two_way=True):
             print(f"  ✓ Added {osm_edges_added:,} OSM edges to graph")
             print(f"  ✓ Enhanced graph: {len(graph.id_to_node):,} total nodes")
         else:
-            print(f"  ⚠️ No OSM roads found in area (will use survey segments only)")
+            print("  ⚠️ No OSM roads found in area (will use survey segments only)")
 
     except Exception as e:
         print(f"  ⚠️ Could not fetch OSM roads: {e}")
-        print(f"  Continuing with survey segments only...")
+        print("  Continuing with survey segments only...")
 
     return graph, required_edges
 
@@ -1309,7 +1307,7 @@ def full_pipeline(
     )
     print(f"  ✓ Created {len(clusters)} clusters")
 
-    print(f"\n[5/8] Ordering clusters...")
+    print("\n[5/8] Ordering clusters...")
     order = order_clusters(
         clusters, segments, use_ortools=use_ortools_for_cluster_order and ORTOOLS_AVAILABLE
     )
@@ -1386,7 +1384,7 @@ def full_pipeline(
                 print(f"  ⚠️ WARNING: No road path from cluster {idx} to {idx+1}")
                 print(f"     From: {prev_end}")
                 print(f"     To: {next_start}")
-                print(f"     Using direct connection (check your road network!)")
+                print("     Using direct connection (check your road network!)")
                 inter_path = [prev_end, next_start]
                 inter_dist = haversine(prev_end, next_start)
 
@@ -2479,7 +2477,7 @@ class RouteOptimizer(QMainWindow):
 
         self.log_message("")
         self.log_message("╔════════════════════════════════════════════╗")
-        self.log_message(f"    ✗ ERROR OCCURRED")
+        self.log_message("    ✗ ERROR OCCURRED")
         self.log_message("╚════════════════════════════════════════════╝")
         self.log_message(error_msg)
         self.log_message("╚════════════════════════════════════════════╝")

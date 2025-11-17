@@ -5,20 +5,20 @@ Supports DBSCAN, K-means, and grid-based clustering with automatic
 method selection based on data characteristics.
 """
 
-from typing import List, Dict, Tuple, cast
-from enum import Enum
-from math import radians, cos, sin, asin, sqrt
 from collections import defaultdict
+from enum import Enum
+from math import asin, cos, radians, sin, sqrt
+from typing import Dict, List, Tuple, cast
 
-from .types import Coordinate, ClusterID, SegmentIndex, ClusterResult
-from .logging_config import get_logger, LogTimer
+from .logging_config import LogTimer, get_logger
+from .types import ClusterID, ClusterResult, Coordinate, SegmentIndex
 
 logger = get_logger(__name__)
 
 # Try to import scikit-learn
 try:
-    from sklearn.cluster import DBSCAN, KMeans  # type: ignore[import-untyped]
     import numpy as np
+    from sklearn.cluster import DBSCAN, KMeans  # type: ignore[import-untyped]
 
     SKLEARN_AVAILABLE = True
 except ImportError:
@@ -260,7 +260,7 @@ def _process_labels(
         noise_count = len(clusters[-1])
         if handle_noise:
             # Move noise to new cluster ID
-            max_label = max(label for label in clusters.keys() if label != -1)
+            max_label = max(label for label in clusters if label != -1)
             new_cluster_id = max_label + 1
             clusters[new_cluster_id] = clusters.pop(-1)
             logger.info(f"Moved {noise_count} noise points to cluster {new_cluster_id}")

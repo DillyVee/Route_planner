@@ -6,8 +6,9 @@ different Dijkstra implementations.
 """
 
 from typing import List, Optional, Set
-from .types import NodeID
+
 from .logging_config import get_logger
+from .types import NodeID
 
 logger = get_logger(__name__)
 

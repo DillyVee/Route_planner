@@ -12,11 +12,10 @@ Author: Production-ready visualization system
 Version: 1.0.0
 """
 
-from typing import List, Dict, Tuple, Optional
-from pathlib import Path
-from dataclasses import dataclass
 import json
-import colorsys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, List, Optional
 
 
 @dataclass

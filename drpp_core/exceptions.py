@@ -187,8 +187,7 @@ class MemoryError(ResourceError):  # noqa: A001
         self.required_mb = required_mb
         self.available_mb = available_mb
         super().__init__(
-            f"Insufficient memory: need {required_mb:.1f} MB, "
-            f"have {available_mb:.1f} MB"
+            f"Insufficient memory: need {required_mb:.1f} MB, " f"have {available_mb:.1f} MB"
         )
 
 
@@ -198,9 +197,7 @@ class TimeoutError(ResourceError):  # noqa: A001
     def __init__(self, operation: str, timeout_seconds: float):
         self.operation = operation
         self.timeout_seconds = timeout_seconds
-        super().__init__(
-            f"Operation '{operation}' exceeded timeout of {timeout_seconds}s"
-        )
+        super().__init__(f"Operation '{operation}' exceeded timeout of {timeout_seconds}s")
 
 
 # ==============================================================================
@@ -237,4 +234,6 @@ def handle_parse_error(filepath: str, original_error: Exception) -> None:
     elif isinstance(original_error, (FileNotFoundError, PermissionError)):
         raise KMLParseError(filepath, str(original_error)) from original_error
     else:
-        raise KMLParseError(filepath, f"Unexpected error: {type(original_error).__name__}: {original_error}") from original_error
+        raise KMLParseError(
+            filepath, f"Unexpected error: {type(original_error).__name__}: {original_error}"
+        ) from original_error

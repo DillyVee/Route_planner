@@ -14,8 +14,8 @@ import unittest  # noqa: E402
 
 from drpp_core.path_reconstruction import (  # noqa: E402
     reconstruct_path,
-    validate_path,
     reconstruct_path_safe,
+    validate_path,
 )
 
 

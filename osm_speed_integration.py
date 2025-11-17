@@ -17,14 +17,14 @@ Usage:
     graph, required = build_graph_with_time_weights(segments)
 """
 
-import os
 import json
+import os
 import time as time_module
-import requests
-from typing import Dict, Optional, Tuple, List
 from collections import defaultdict
-from math import radians, cos, sin, asin, sqrt
+from math import asin, cos, radians, sin, sqrt
+from typing import Dict, List, Optional, Tuple
 
+import requests
 
 # ============================================================================
 # COORDINATE SNAPPING
@@ -89,7 +89,7 @@ class OverpassSpeedFetcher:
         """Load cache from disk"""
         if os.path.exists(self.cache_file):
             try:
-                with open(self.cache_file, "r") as f:
+                with open(self.cache_file) as f:
                     return json.load(f)
             except Exception as e:
                 print(f"  ⚠ Cache load error: {e}")
@@ -183,7 +183,7 @@ class OverpassSpeedFetcher:
             return ways
 
         except requests.exceptions.Timeout:
-            print(f"  ⚠ Overpass API timeout (bbox too large?)")
+            print("  ⚠ Overpass API timeout (bbox too large?)")
             return {}
         except Exception as e:
             print(f"  ⚠ Overpass API error: {e}")
@@ -415,7 +415,7 @@ def enrich_segments_with_osm_speeds(
     min_lon -= pad
     max_lon += pad
 
-    print(f"\n[OSM] Fetching speed data for area...")
+    print("\n[OSM] Fetching speed data for area...")
     print(f"  Bbox: ({min_lat:.5f}, {min_lon:.5f}) to ({max_lat:.5f}, {max_lon:.5f})")
 
     osm_ways = overpass_fetcher.fetch_speeds_for_bbox(min_lat, min_lon, max_lat, max_lon)
@@ -429,7 +429,7 @@ def enrich_segments_with_osm_speeds(
         return segments
 
     # Build spatial index
-    print(f"[OSM] Building spatial index...")
+    print("[OSM] Building spatial index...")
     index = SimpleGridIndex(cell_size_deg=0.01)  # ~1km cells
     for way_data in osm_ways.values():
         index.add_way(way_data)
@@ -658,7 +658,7 @@ def calculate_average_speed(segments: List[dict]) -> float:
         return avg_speed
 
     # Fallback
-    print(f"  ⚠ No speed data found, using default 30 km/h")
+    print("  ⚠ No speed data found, using default 30 km/h")
     return 30.0
 
 

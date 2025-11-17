@@ -5,16 +5,16 @@ Uses ProcessPoolExecutor for better resource management compared to Pool.
 Precomputes distance matrices in parent process to avoid pickling full graph.
 """
 
-from typing import List, Dict, Tuple, Optional, Callable, Any, Union
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import dataclass
 import multiprocessing
 import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-from .types import Coordinate, NodeID, SegmentIndex, ClusterID, PathResult
 from .distance_matrix import DistanceMatrix, compute_distance_matrix
-from .greedy_router import greedy_route_cluster, NodeNormalizer
-from .logging_config import get_logger, LogTimer
+from .greedy_router import NodeNormalizer, greedy_route_cluster
+from .logging_config import LogTimer, get_logger
+from .types import ClusterID, Coordinate, NodeID, PathResult, SegmentIndex
 
 logger = get_logger(__name__)
 
