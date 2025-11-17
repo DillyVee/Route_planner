@@ -23,16 +23,9 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from math import asin, cos, radians, sin, sqrt
 
-from osm_speed_integration import (
-    OverpassSpeedFetcher,
-    build_graph_with_time_weights,
-)
+from osm_speed_integration import OverpassSpeedFetcher, build_graph_with_time_weights
 from osm_speed_integration import calculate_average_speed as calculate_average_speed_osm
-from osm_speed_integration import (
-    enrich_segments_with_osm_speeds,
-    snap_coord,
-    snap_coords_list,
-)
+from osm_speed_integration import enrich_segments_with_osm_speeds, snap_coord, snap_coords_list
 
 # ============================================================================
 # PARALLEL PROCESSING - PRODUCTION V4 (with fallbacks to legacy versions)
@@ -41,10 +34,7 @@ from osm_speed_integration import (
 # Try to import Production V4 first (recommended)
 V4_AVAILABLE = False
 try:
-    from drpp_core import (
-        ClusteringMethod,
-        PathResult,
-    )
+    from drpp_core import ClusteringMethod, PathResult
     from drpp_core import cluster_segments as cluster_segments_v4
     from drpp_core import estimate_optimal_workers as estimate_optimal_workers_v4
     from drpp_core import parallel_cluster_routing as parallel_cluster_routing_v4

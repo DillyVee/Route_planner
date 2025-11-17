@@ -15,12 +15,7 @@ from pathlib import Path
 from typing import Dict, List
 
 # Import production-ready modules
-from drpp_core import (
-    ClusteringMethod,
-    ClusterResult,
-    cluster_segments,
-    estimate_optimal_workers,
-)
+from drpp_core import ClusteringMethod, ClusterResult, cluster_segments, estimate_optimal_workers
 from drpp_core.logging_config import LogTimer, setup_logging
 from drpp_core.profiling import track_memory
 
