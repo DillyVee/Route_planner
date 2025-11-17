@@ -176,10 +176,15 @@ class DRPPPipeline:
         """Parse KML and extract segment requirements.
 
         Reads KML format and extracts:
-        - Segment IDs (from name or auto-generated)
+        - Segment IDs (from CollId or name)
         - Directionality (one-way vs two-way)
         - Required traversals for each direction
         - Coordinates
+        - MapPlus/Duweis roadway metadata
+
+        Supports MapPlus format with:
+        - MapPlusCustomFeatureClass schema (CollId, RouteName, Dir, etc.)
+        - MapPlusSystemData schema (LABEL_EXPR, LABEL_TEXT)
         """
         import xml.etree.ElementTree as ET
         from osm_speed_integration import snap_coord, snap_coords_list
@@ -201,6 +206,7 @@ class DRPPPipeline:
 
         root = tree.getroot()
         segments = []
+        mapplus_format_detected = False
 
         for idx, pm in enumerate(root.findall('.//{http://www.opengis.net/kml/2.2}Placemark')):
             ls = pm.find('.//{http://www.opengis.net/kml/2.2}LineString')
@@ -232,47 +238,95 @@ class DRPPPipeline:
             if len(coords) < 2:
                 continue
 
-            # Extract segment ID (from name or auto-generate)
-            name = pm.find('{http://www.opengis.net/kml/2.2}name')
-            segment_id = name.text.strip() if name is not None and name.text else f"seg_{idx:05d}"
-
-            # Extract oneway flag
-            oneway = None
-            ext = pm.find('{http://www.opengis.net/kml/2.2}ExtendedData')
-            oneway_candidates = ['oneway', 'one_way', 'one-way', 'is_one_way']
-
-            if ext is not None:
-                for elem in ext.iter():
-                    tag = elem.tag.split('}')[-1].lower() if isinstance(elem.tag, str) else ''
-                    txt = (elem.text or '').strip().lower()
-
-                    if tag in oneway_candidates:
-                        if txt in ('yes', 'true', '1', 'y'):
-                            oneway = True
-                        elif txt in ('no', 'false', '0', 'n'):
-                            oneway = False
-
-            # Extract metadata (speed limits, etc.)
+            # Extract metadata from ExtendedData
             metadata = {}
+            segment_id = None
+            oneway = None
+
+            ext = pm.find('{http://www.opengis.net/kml/2.2}ExtendedData')
             if ext is not None:
-                for elem in ext.iter():
-                    tag = elem.tag.split('}')[-1]
-                    if elem.text:
-                        metadata[tag] = elem.text
+                # Look for MapPlus schema data
+                for schema_data in ext.findall('{http://www.opengis.net/kml/2.2}SchemaData'):
+                    schema_url = schema_data.get('schemaUrl', '')
+
+                    # MapPlusCustomFeatureClass - main road segment attributes
+                    if 'MapPlusCustomFeatureClass' in schema_url:
+                        mapplus_format_detected = True
+                        for simple_data in schema_data.findall('{http://www.opengis.net/kml/2.2}SimpleData'):
+                            field_name = simple_data.get('name', '')
+                            field_value = simple_data.text or ''
+
+                            # Store all fields in metadata
+                            metadata[field_name] = field_value
+
+                            # Extract specific fields for routing logic
+                            if field_name == 'CollId':
+                                segment_id = field_value
+                            elif field_name == 'Dir':
+                                # Dir field might indicate direction
+                                # Common values: 'N', 'S', 'E', 'W', 'NB', 'SB', 'EB', 'WB'
+                                # For now, preserve in metadata
+                                metadata['direction_code'] = field_value
+                            elif field_name == 'RouteName':
+                                metadata['route_name'] = field_value
+                            elif field_name == 'LengthFt':
+                                try:
+                                    metadata['length_ft'] = float(field_value)
+                                except (ValueError, TypeError):
+                                    pass
+                            elif field_name in ['Region', 'Juris', 'CntyCode', 'StRtNo',
+                                              'SegNo', 'BegM', 'EndM', 'IsPilot', 'Collected']:
+                                # Store roadway metadata
+                                metadata[field_name.lower()] = field_value
+
+                    # MapPlusSystemData - label information
+                    elif 'MapPlusSystemData' in schema_url:
+                        for simple_data in schema_data.findall('{http://www.opengis.net/kml/2.2}SimpleData'):
+                            field_name = simple_data.get('name', '')
+                            field_value = simple_data.text or ''
+                            metadata[f'label_{field_name.lower()}'] = field_value
+
+                # Fallback: check for generic extended data (non-schema)
+                if not mapplus_format_detected:
+                    for elem in ext.iter():
+                        tag = elem.tag.split('}')[-1].lower() if isinstance(elem.tag, str) else ''
+                        txt = (elem.text or '').strip()
+
+                        # Check for oneway indicators
+                        if tag in ['oneway', 'one_way', 'one-way', 'is_one_way']:
+                            txt_lower = txt.lower()
+                            if txt_lower in ('yes', 'true', '1', 'y'):
+                                oneway = True
+                            elif txt_lower in ('no', 'false', '0', 'n'):
+                                oneway = False
+
+                        # Store all metadata
+                        if txt:
+                            metadata[tag] = txt
+
+            # Use name as fallback for segment_id
+            if segment_id is None:
+                name = pm.find('{http://www.opengis.net/kml/2.2}name')
+                segment_id = name.text.strip() if name is not None and name.text else f"seg_{idx:05d}"
 
             # Determine required traversals
-            # By default, all segments are required in at least one direction
+            # For roadway surveys, typically:
+            # - All segments are required in at least one direction
+            # - Most are two-way unless specifically marked one-way
+            # - Use 'Dir' field or 'oneway' field if available
+
             if oneway is True:
-                # One-way: only forward required
+                # Explicitly one-way
                 forward_required = True
                 backward_required = False
             elif oneway is False:
-                # Two-way street, but may only need one direction
-                # Default: require both directions for complete coverage
+                # Explicitly two-way
                 forward_required = True
                 backward_required = True
             else:
-                # Unknown - assume two-way required
+                # Default behavior for roadway surveys:
+                # Assume both directions required unless specified otherwise
+                # This ensures complete coverage for survey routes
                 forward_required = True
                 backward_required = True
 
@@ -289,6 +343,13 @@ class DRPPPipeline:
             raise ValueError("No valid segments found in KML file")
 
         self.logger.info(f"  Parsed {len(segments)} segments")
+        if mapplus_format_detected:
+            self.logger.info("  ✓ MapPlus/Duweis format detected - preserving roadway metadata")
+            # Show sample of what was extracted
+            if segments and segments[0].metadata:
+                sample_fields = list(segments[0].metadata.keys())[:5]
+                self.logger.info(f"  ✓ Extracted fields: {', '.join(sample_fields)}...")
+
         return segments
 
     def _build_graph(self):
