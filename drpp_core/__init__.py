@@ -18,6 +18,26 @@ from .path_reconstruction import reconstruct_path
 from .clustering import cluster_segments, ClusteringMethod
 from .greedy_router import greedy_route_cluster
 from .parallel_executor import parallel_cluster_routing, estimate_optimal_workers
+from .geo import haversine, snap_coordinate, calculate_bearing
+from .exceptions import (
+    DRPPError,
+    ParseError,
+    KMLParseError,
+    ValidationError,
+    GraphError,
+    GraphBuildError,
+    DisconnectedGraphError,
+    RoutingError,
+    NoPathError,
+    UnreachableSegmentError,
+    OptimizationError,
+    ClusteringError,
+    OSMError,
+    OverpassAPIError,
+    OSMMatchingError,
+    VisualizationError,
+    ConfigurationError,
+)
 
 __all__ = [
     # Types
@@ -39,6 +59,28 @@ __all__ = [
     # Parallel Processing
     "parallel_cluster_routing",
     "estimate_optimal_workers",
+    # Geographic Utilities
+    "haversine",
+    "snap_coordinate",
+    "calculate_bearing",
+    # Exceptions
+    "DRPPError",
+    "ParseError",
+    "KMLParseError",
+    "ValidationError",
+    "GraphError",
+    "GraphBuildError",
+    "DisconnectedGraphError",
+    "RoutingError",
+    "NoPathError",
+    "UnreachableSegmentError",
+    "OptimizationError",
+    "ClusteringError",
+    "OSMError",
+    "OverpassAPIError",
+    "OSMMatchingError",
+    "VisualizationError",
+    "ConfigurationError",
 ]
 
 __version__ = "4.0.0"

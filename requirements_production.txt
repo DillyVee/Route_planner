@@ -1,30 +1,28 @@
-# Production Requirements for DRPP Solver V4.0
+# ============================================================================
+# DRPP Route Planner - Dependency Installation Guide
+# ============================================================================
 #
-# Install with: pip install -r requirements_production.txt
-
-# Core dependencies (required)
-# Python 3.9+ has these built-in:
-# - typing
-# - dataclasses
-# - concurrent.futures
-# - logging
-# - multiprocessing
-
-# Optional but highly recommended
-numpy>=1.20.0               # For large distance matrices (auto-enabled for >=1000 nodes)
-scikit-learn>=0.24.0        # For DBSCAN and K-means clustering
-psutil>=5.8.0               # For memory tracking in profiling
-
-# Development and testing
-pytest>=6.2.0               # For running unit tests
-pytest-cov>=2.12.0          # For test coverage reports
-
-# Optional profiling
-memory_profiler>=0.60.0     # For detailed memory profiling (optional)
-
-# Optional type checking
-mypy>=0.910                 # For static type checking (development only)
-
-# Documentation (if generating docs)
-# sphinx>=4.0.0
-# sphinx-rtd-theme>=0.5.0
+# This project uses modern Python packaging with pyproject.toml (PEP 517/518).
+# Please use one of the following installation methods instead of this file:
+#
+# For core library only (DRPP solver without GUI):
+#   pip install -e .
+#
+# For GUI application (recommended for most users):
+#   pip install -e ".[gui]"
+#
+# For all features:
+#   pip install -e ".[all]"
+#
+# For development:
+#   pip install -e ".[dev]"
+#
+# Individual feature groups:
+#   pip install -e ".[viz]"        # Visualization only
+#   pip install -e ".[ml]"         # Machine learning clustering
+#   pip install -e ".[osm]"        # OSM speed integration
+#   pip install -e ".[profiling]"  # Performance profiling tools
+#
+# ============================================================================
+# See pyproject.toml for the complete dependency specification
+# ============================================================================
