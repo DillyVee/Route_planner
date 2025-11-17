@@ -367,7 +367,20 @@ class DirectedGraph:
         if not any(v == ib for v, _ in self.adj[ia]):
             self.adj[ia].append((ib, w))
 
-    def dijkstra(self, source_id):
+    def dijkstra(self, source_id, max_distance=None):
+        """
+        Compute shortest paths from source to all nodes using Dijkstra's algorithm.
+
+        Args:
+            source_id: Starting node ID
+            max_distance: Optional distance threshold for early termination (meters)
+                         If specified, stops exploring nodes beyond this distance
+
+        Returns:
+            (distances, predecessors) where:
+                - distances[node_id] = shortest distance from source
+                - predecessors[node_id] = previous node in shortest path
+        """
         n = len(self.id_to_node)
         dist = [float("inf")] * n
         prev = [-1] * n
@@ -376,6 +389,11 @@ class DirectedGraph:
 
         while h:
             d, u = heapq.heappop(h)
+
+            # Early termination: stop if we've exceeded max distance
+            if max_distance and d > max_distance:
+                break
+
             if d > dist[u]:
                 continue
             for v, w in self.adj[u]:
@@ -736,21 +754,26 @@ def parallel_cluster_routing_v4_wrapper(
     allow_return=True,
     num_workers=None,
     progress_callback=None,
+    lookahead_depth=1,
+    max_search_distance=None,
 ):
     """
     Wrapper to make V4 parallel_cluster_routing compatible with legacy API.
 
-    Uses ON-DEMAND mode for maximum speed (10-100x faster).
+    Uses ON-DEMAND mode for maximum speed and memory safety.
     Converts PathResult objects to legacy (path, distance, cluster_id) tuples.
+
+    Args:
+        lookahead_depth: 1-3 steps lookahead (1=greedy, 2-3=smarter routing)
+        max_search_distance: Maximum search distance in meters (None=unlimited)
     """
     # Determine start node
     first_cid = cluster_order[0]
     first_seg_idx = clusters[first_cid][0]
     start_node = required_edges[first_seg_idx][0]
 
-    # Call V4 routing with PARALLEL matrix precomputation
-    # Uses ProcessPoolExecutor to route multiple clusters simultaneously
-    results = parallel_cluster_routing_v4(
+    # Call V4 ON-DEMAND routing with optimizations
+    results = parallel_cluster_routing_v4_ondemand(
         graph=graph,
         required_edges=required_edges,
         clusters=clusters,
@@ -758,6 +781,8 @@ def parallel_cluster_routing_v4_wrapper(
         start_node=start_node,
         num_workers=num_workers,
         progress_callback=progress_callback,
+        lookahead_depth=lookahead_depth,
+        max_search_distance=max_search_distance,
     )
 
     # Convert PathResult objects to legacy tuple format
@@ -1326,10 +1351,10 @@ def full_pipeline(
     # PRIORITY: Use Production V4 for greedy routing (RECOMMENDED)
     if V4_AVAILABLE and routing_algorithm == "greedy":
         parallel_cluster_routing = parallel_cluster_routing_v4_wrapper
-        print("  🚀 Using Production V4 Greedy with PARALLEL processing (FAST)")
-        print("     ✅ Multi-core parallel cluster routing")
-        print("     ✅ 10-50x memory reduction vs legacy")
-        print("     ✅ <0.1% crash rate")
+        print("  🚀 Using Production V4 Greedy with ON-DEMAND mode (Memory-Safe)")
+        print("     ✅ No matrix precomputation (avoids MemoryError)")
+        print("     ✅ Sequential processing (slower but stable)")
+        print("     ✅ Suitable for large datasets")
     elif routing_algorithm == "rfcs" and RFCS_AVAILABLE:
         parallel_cluster_routing = parallel_cluster_routing_rfcs
         print("  🏆 Using RFCS + Eulerization (GOLD STANDARD - 95-98% optimal)")

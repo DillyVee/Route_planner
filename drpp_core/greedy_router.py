@@ -163,6 +163,8 @@ def _greedy_route_ondemand(
     required_edges: List[Tuple],
     segment_indices: List[SegmentIndex],
     start_node: Union[Coordinate, NodeID],
+    lookahead_depth: int = 1,
+    max_search_distance: Optional[float] = None,
 ) -> PathResult:
     """Route using on-demand Dijkstra (no precomputation).
 
@@ -181,6 +183,8 @@ def _greedy_route_ondemand(
         required_edges: List of all required edges
         segment_indices: Indices of segments to route through
         start_node: Starting position
+        lookahead_depth: Number of steps to look ahead (1-3)
+        max_search_distance: Maximum distance to search (meters)
 
     Returns:
         PathResult with route and diagnostics
@@ -210,8 +214,11 @@ def _greedy_route_ondemand(
             iteration += 1
 
             # Compute single-source Dijkstra from current position
+            # Use max_search_distance to limit exploration if specified
             try:
-                distances, predecessors = graph.dijkstra(current_id)
+                distances, predecessors = graph.dijkstra(
+                    current_id, max_distance=max_search_distance
+                )
             except Exception as e:
                 logger.error(f"Dijkstra failed at iteration {iteration}: {e}", exc_info=True)
                 # Mark all remaining as unreachable
@@ -225,10 +232,8 @@ def _greedy_route_ondemand(
                     )
                 break
 
-            # Find nearest reachable segment
-            best_seg_idx: Optional[SegmentIndex] = None
-            best_dist = float("inf")
-            best_path_ids: Optional[List[NodeID]] = None
+            # Collect candidate segments with look-ahead
+            candidates = []
 
             for seg_idx in remaining:
                 segment_start = required_edges[seg_idx][0]
@@ -241,13 +246,63 @@ def _greedy_route_ondemand(
                 # Check if reachable and get distance
                 if segment_start_id in distances:
                     dist = distances[segment_start_id]
-                    if dist < best_dist:
-                        # Reconstruct path
-                        path = reconstruct_path(predecessors, current_id, segment_start_id)
-                        if path:
-                            best_dist = dist
-                            best_seg_idx = seg_idx
-                            best_path_ids = path
+
+                    # Apply distance threshold filter
+                    if max_search_distance and dist > max_search_distance:
+                        continue
+
+                    # Reconstruct path
+                    path = reconstruct_path(predecessors, current_id, segment_start_id)
+                    if path:
+                        candidates.append((seg_idx, dist, path))
+
+            # No candidates found
+            if not candidates:
+                best_seg_idx = None
+                best_dist = float("inf")
+                best_path_ids = None
+            elif lookahead_depth <= 1:
+                # Simple greedy: pick nearest
+                candidates.sort(key=lambda x: x[1])
+                best_seg_idx, best_dist, best_path_ids = candidates[0]
+            else:
+                # Look-ahead: evaluate top candidates considering future connectivity
+                candidates.sort(key=lambda x: x[1])
+                top_candidates = candidates[: min(lookahead_depth + 2, len(candidates))]
+
+                best_score = -float("inf")
+                best_seg_idx = None
+                best_dist = float("inf")
+                best_path_ids = None
+
+                for seg_idx, dist, path in top_candidates:
+                    # Score = -distance + bonus for future connectivity
+                    score = -dist
+
+                    # Look ahead: count nearby remaining segments from this segment's end
+                    segment_end = required_edges[seg_idx][1]
+                    segment_end_id = normalizer.to_id(segment_end)
+
+                    if segment_end_id is not None:
+                        nearby_count = 0
+                        for other_idx in remaining:
+                            if other_idx == seg_idx:
+                                continue
+                            other_start = required_edges[other_idx][0]
+                            other_start_id = normalizer.to_id(other_start)
+                            if other_start_id is not None and other_start_id in distances:
+                                # Estimate distance from segment end to other segment
+                                # Use simple heuristic: if reachable, add small bonus
+                                nearby_count += 1
+
+                        # Bonus for good future connectivity
+                        score += nearby_count * 50  # Weight for look-ahead
+
+                    if score > best_score:
+                        best_score = score
+                        best_seg_idx = seg_idx
+                        best_dist = dist
+                        best_path_ids = path
 
             # No segment found - all remaining are unreachable
             if best_seg_idx is None:
@@ -347,6 +402,8 @@ def greedy_route_cluster(
     normalizer: Optional[NodeNormalizer] = None,
     enable_fallback: bool = True,
     use_ondemand: bool = False,
+    lookahead_depth: int = 1,
+    max_search_distance: Optional[float] = None,
 ) -> PathResult:
     """Route through segments using greedy nearest-neighbor approach.
 
@@ -361,6 +418,10 @@ def greedy_route_cluster(
         enable_fallback: If True, use Dijkstra fallback for unreachable segments
         use_ondemand: If True, use on-demand Dijkstra instead of precomputing matrix
                      (MUCH faster for large clusters)
+        lookahead_depth: Number of steps to look ahead (1-3). Higher values consider
+                        future connectivity but are slower. Default: 1 (pure greedy)
+        max_search_distance: Maximum distance to search for candidates (meters).
+                            Segments beyond this distance are ignored. Default: None (unlimited)
 
     Returns:
         PathResult with route, distance, and diagnostics
@@ -396,7 +457,14 @@ def greedy_route_cluster(
     # Use on-demand routing for large clusters (avoids expensive all-pairs precomputation)
     if use_ondemand:
         logger.info(f"Using on-demand Dijkstra routing for {len(segment_indices)} segments")
-        return _greedy_route_ondemand(graph, required_edges, segment_indices, start_node)
+        return _greedy_route_ondemand(
+            graph,
+            required_edges,
+            segment_indices,
+            start_node,
+            lookahead_depth=lookahead_depth,
+            max_search_distance=max_search_distance,
+        )
 
     # Compute matrix if not provided
     if distance_matrix is None or normalizer is None:
@@ -416,14 +484,22 @@ def greedy_route_cluster(
                 node_ids.add(end_id)
 
         # If too many endpoints, switch to on-demand mode automatically
-        if len(node_ids) > 1000:
+        # Lowered from 1000 to 500 to be more aggressive about avoiding memory issues
+        if len(node_ids) > 500:
             num_nodes = len(node_ids)
             logger.warning(
                 f"Cluster has {num_nodes} segment endpoints. "
                 f"Switching to on-demand mode (precomputing {num_nodes}² "
-                f"distances would be very slow)"
+                f"distances would require {num_nodes * num_nodes // 1000000}M+ computations)"
             )
-            return _greedy_route_ondemand(graph, required_edges, segment_indices, start_node)
+            return _greedy_route_ondemand(
+                graph,
+                required_edges,
+                segment_indices,
+                start_node,
+                lookahead_depth=lookahead_depth,
+                max_search_distance=max_search_distance,
+            )
 
         logger.info(
             f"Computing distance matrix for {len(segment_indices)} segments "

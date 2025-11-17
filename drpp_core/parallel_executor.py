@@ -461,6 +461,8 @@ def parallel_cluster_routing_ondemand(
     start_node: Union[Coordinate, NodeID],
     num_workers: Optional[int] = None,
     progress_callback: Optional[Callable[[int, int], None]] = None,
+    lookahead_depth: int = 1,
+    max_search_distance: Optional[float] = None,
 ) -> List[PathResult]:
     """Route through clusters in parallel using on-demand Dijkstra (MUCH faster).
 
@@ -479,6 +481,8 @@ def parallel_cluster_routing_ondemand(
         start_node: Global starting position
         num_workers: Number of worker processes (default: CPU count - 1)
         progress_callback: Optional function(completed, total) for progress
+        lookahead_depth: Number of steps to look ahead (1-3). Higher considers future connectivity
+        max_search_distance: Maximum distance to search (meters). Limits Dijkstra exploration
 
     Returns:
         List of PathResult objects in cluster_order
@@ -524,6 +528,8 @@ def parallel_cluster_routing_ondemand(
                 segment_indices=seg_idxs,
                 start_node=start_node,
                 use_ondemand=True,  # KEY: Forces on-demand Dijkstra
+                lookahead_depth=lookahead_depth,
+                max_search_distance=max_search_distance,
             )
 
             # Set cluster ID
