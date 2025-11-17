@@ -26,11 +26,13 @@ from math import asin, cos, radians, sin, sqrt
 from osm_speed_integration import (
     OverpassSpeedFetcher,
     build_graph_with_time_weights,
+)
+from osm_speed_integration import calculate_average_speed as calculate_average_speed_osm
+from osm_speed_integration import (
     enrich_segments_with_osm_speeds,
     snap_coord,
     snap_coords_list,
 )
-from osm_speed_integration import calculate_average_speed as calculate_average_speed_osm
 
 # ============================================================================
 # PARALLEL PROCESSING - PRODUCTION V4 (with fallbacks to legacy versions)
