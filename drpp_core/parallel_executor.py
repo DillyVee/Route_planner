@@ -508,13 +508,12 @@ def parallel_cluster_routing_ondemand(
     )
 
     results: List[PathResult] = []
-    completed = 0
 
     logger.info("Using on-demand Dijkstra routing (10-100x faster for large clusters)")
     parallel_start = time.perf_counter()
 
     # Route each cluster using on-demand mode
-    for cluster_index, cluster_id in enumerate(cluster_order):
+    for completed, cluster_id in enumerate(cluster_order, start=1):
         seg_idxs = clusters[cluster_id]
 
         try:
@@ -555,8 +554,6 @@ def parallel_cluster_routing_ondemand(
                     computation_time=0.0,
                 )
             )
-
-        completed += 1
 
         # Progress callback
         if progress_callback is not None:
