@@ -448,16 +448,16 @@ class DRPPPipeline:
         # Select algorithm
         if algorithm == "rfcs" and RFCS_AVAILABLE:
             self.logger.info("  Using RFCS algorithm (Route-First, Cluster-Second)")
-            from parallel_processing_addon_rfcs import parallel_cluster_routing
+            from legacy.parallel_processing_addon_rfcs import parallel_cluster_routing
         elif algorithm == "v4" and V4_AVAILABLE:
             self.logger.info("  Using V4 greedy algorithm (Production)")
             from drpp_core import parallel_cluster_routing
         elif algorithm == "greedy" and GREEDY_AVAILABLE:
             self.logger.info("  Using legacy greedy algorithm")
-            from parallel_processing_addon_greedy import parallel_cluster_routing
+            from legacy.parallel_processing_addon_greedy import parallel_cluster_routing
         else:
             self.logger.info("  Using Hungarian algorithm (default)")
-            from parallel_processing_addon import parallel_cluster_routing
+            from legacy.parallel_processing_addon import parallel_cluster_routing
 
         # For simplicity, use single cluster for now (full route)
         clusters = {0: list(range(len(required_edges)))}

@@ -54,7 +54,7 @@ except ImportError:
     print("⚠️ Production V4 not available, using legacy versions")
 
 # Legacy imports (fallback)
-from parallel_processing_addon import (
+from legacy.parallel_processing_addon import (
     parallel_cluster_routing as parallel_cluster_routing_hungarian,
     estimate_optimal_workers,
     ParallelTimer,
@@ -63,7 +63,7 @@ from parallel_processing_addon import (
 
 # Import greedy algorithm version (legacy)
 try:
-    from parallel_processing_addon_greedy import (
+    from legacy.parallel_processing_addon_greedy import (
         parallel_cluster_routing as parallel_cluster_routing_greedy,
     )
 
@@ -75,7 +75,7 @@ except ImportError:
 
 # Import RFCS (Route-First, Cluster-Second) algorithm version (legacy)
 try:
-    from parallel_processing_addon_rfcs import (
+    from legacy.parallel_processing_addon_rfcs import (
         parallel_cluster_routing as parallel_cluster_routing_rfcs,
     )
 

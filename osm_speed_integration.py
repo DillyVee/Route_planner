@@ -448,7 +448,7 @@ def enrich_segments_with_osm_speeds(
             seg["speed_source"] = "kml"
 
     # Parallel matching
-    from parallel_processing_addon import parallel_osm_matching
+    from legacy.parallel_processing_addon import parallel_osm_matching
 
     segments = parallel_osm_matching(
         segments=segments,
