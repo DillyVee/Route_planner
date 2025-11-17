@@ -64,7 +64,15 @@ class NodeNormalizer:
         """
         if isinstance(node, tuple):
             return node
-        return self.id_to_node.get(node)
+        # Handle both dict and list for id_to_node
+        if isinstance(self.id_to_node, dict):
+            return self.id_to_node.get(node)
+        elif isinstance(self.id_to_node, list):
+            try:
+                return self.id_to_node[node] if node < len(self.id_to_node) else None
+            except (IndexError, TypeError):
+                return None
+        return None
 
 
 def _calculate_segment_length(coordinates: List[Coordinate]) -> Distance:

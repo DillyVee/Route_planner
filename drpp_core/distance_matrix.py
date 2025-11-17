@@ -283,10 +283,21 @@ def compute_distance_matrix(
     num_nodes = len(node_ids)
     logger.info(f"Computing distance matrix for {num_nodes} nodes")
 
-    # Auto-select numpy for large matrices
+    # Check if node IDs are contiguous (required for NumPy storage)
+    max_node_id = max(node_ids) if node_ids else 0
+    min_node_id = min(node_ids) if node_ids else 0
+    is_contiguous = (max_node_id - min_node_id + 1) == num_nodes
+
+    # Auto-select numpy for large matrices (only if node IDs are contiguous)
     if not use_numpy and NUMPY_AVAILABLE and num_nodes >= 1000:
-        use_numpy = True
-        logger.info(f"Auto-enabling NumPy storage for large matrix ({num_nodes} nodes)")
+        if is_contiguous and max_node_id < 100000:  # Reasonable upper bound
+            use_numpy = True
+            logger.info(f"Auto-enabling NumPy storage for large matrix ({num_nodes} nodes)")
+        else:
+            logger.warning(
+                f"Node IDs are non-contiguous (range: {min_node_id}-{max_node_id}, "
+                f"count: {num_nodes}). Using dict storage instead of NumPy."
+            )
 
     with LogTimer(logger, "Distance matrix computation"):
         matrix = DistanceMatrix(use_numpy=use_numpy, num_nodes=num_nodes)
