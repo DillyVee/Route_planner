@@ -38,7 +38,9 @@ try:
     from drpp_core import cluster_segments as cluster_segments_v4
     from drpp_core import estimate_optimal_workers as estimate_optimal_workers_v4
     from drpp_core import parallel_cluster_routing as parallel_cluster_routing_v4
-    from drpp_core import sequential_cluster_routing_ondemand as parallel_cluster_routing_v4_ondemand
+    from drpp_core import (
+        sequential_cluster_routing_ondemand as parallel_cluster_routing_v4_ondemand,
+    )
     from drpp_core.logging_config import setup_logging as setup_drpp_logging
     from drpp_core.path_reconstruction import reconstruct_path
 

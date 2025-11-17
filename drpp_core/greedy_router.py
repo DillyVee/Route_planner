@@ -245,7 +245,9 @@ def _greedy_route_ondemand(
                     continue
 
                 # Check if reachable and get distance (with bounds check)
-                if segment_start_id < len(distances) and distances[segment_start_id] != float("inf"):
+                if segment_start_id < len(distances) and distances[segment_start_id] != float(
+                    "inf"
+                ):
                     dist = distances[segment_start_id]
 
                     # Apply distance threshold filter
@@ -546,7 +548,9 @@ def greedy_route_cluster(
             if isinstance(graph.id_to_node, dict):
                 start_coords = graph.id_to_node.get(start_id)
             else:
-                start_coords = graph.id_to_node[start_id] if start_id < len(graph.id_to_node) else None
+                start_coords = (
+                    graph.id_to_node[start_id] if start_id < len(graph.id_to_node) else None
+                )
 
         if start_id is not None and start_coords is not None:
             node_ids.add(start_id)
