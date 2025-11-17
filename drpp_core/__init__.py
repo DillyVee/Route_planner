@@ -38,8 +38,11 @@ from .greedy_router import greedy_route_cluster
 from .parallel_executor import (
     estimate_optimal_workers,
     parallel_cluster_routing,
-    parallel_cluster_routing_ondemand,
+    sequential_cluster_routing_ondemand,
 )
+
+# Backward compatibility alias
+parallel_cluster_routing_ondemand = sequential_cluster_routing_ondemand
 from .path_reconstruction import reconstruct_path
 from .types import ClusterResult, Coordinate, NodeID, PathResult, SegmentIndex
 
@@ -62,7 +65,8 @@ __all__ = [
     "greedy_route_cluster",
     # Parallel Processing
     "parallel_cluster_routing",
-    "parallel_cluster_routing_ondemand",
+    "sequential_cluster_routing_ondemand",
+    "parallel_cluster_routing_ondemand",  # Backward compatibility alias
     "estimate_optimal_workers",
     # Geographic Utilities
     "haversine",

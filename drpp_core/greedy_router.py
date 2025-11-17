@@ -139,7 +139,8 @@ def _try_dijkstra_fallback(
             logger.warning(f"Segment {seg_idx} start node has no ID")
             continue
 
-        if distances[segment_start_id] < best_dist:
+        # Bounds check before array access
+        if segment_start_id < len(distances) and distances[segment_start_id] < best_dist:
             # Try to reconstruct path
             path_ids = reconstruct_path(predecessors, current_id, segment_start_id)
             if path_ids:
@@ -243,8 +244,8 @@ def _greedy_route_ondemand(
                     logger.warning(f"Segment {seg_idx} has invalid start node")
                     continue
 
-                # Check if reachable and get distance
-                if segment_start_id in distances:
+                # Check if reachable and get distance (with bounds check)
+                if segment_start_id < len(distances) and distances[segment_start_id] != float("inf"):
                     dist = distances[segment_start_id]
 
                     # Apply distance threshold filter
@@ -285,14 +286,18 @@ def _greedy_route_ondemand(
 
                     if segment_end_id is not None:
                         nearby_count = 0
+                        # Use haversine distance to estimate future connectivity
+                        from .clustering import haversine
+
                         for other_idx in remaining:
                             if other_idx == seg_idx:
                                 continue
                             other_start = required_edges[other_idx][0]
-                            other_start_id = normalizer.to_id(other_start)
-                            if other_start_id is not None and other_start_id in distances:
-                                # Estimate distance from segment end to other segment
-                                # Use simple heuristic: if reachable, add small bonus
+                            # Use geographic distance as heuristic for future reachability
+                            # This correctly looks ahead from segment_end, not current position
+                            heuristic_dist = haversine(segment_end, other_start)
+                            # Count segments within reasonable distance (5km)
+                            if heuristic_dist < 5000:
                                 nearby_count += 1
 
                         # Bonus for good future connectivity
@@ -525,13 +530,20 @@ def greedy_route_cluster(
         # Include start node
         if isinstance(start_node, tuple):
             start_id = graph.node_to_id.get(start_node)
+            start_coords = start_node
         else:
             start_id = start_node
-            start_node = graph.id_to_node.get(start_id)
+            # Handle both dict and list for id_to_node
+            if isinstance(graph.id_to_node, dict):
+                start_coords = graph.id_to_node.get(start_id)
+            else:
+                start_coords = graph.id_to_node[start_id] if start_id < len(graph.id_to_node) else None
 
-        if start_id is not None:
+        if start_id is not None and start_coords is not None:
             node_ids.add(start_id)
-            id_to_coords[start_id] = start_node
+            id_to_coords[start_id] = start_coords
+        elif start_id is None:
+            raise ValueError(f"Start node not found in graph: {start_node}")
 
         distance_matrix = compute_distance_matrix(graph, node_ids, id_to_coords)
         normalizer = NodeNormalizer(graph.node_to_id, graph.id_to_node)
@@ -657,8 +669,12 @@ def greedy_route_cluster(
                         f"segments, {len(remaining)} remaining"
                     )
 
-    # Convert path to coordinates
-    path_coords = [normalizer.id_to_node[nid] for nid in path_ids if nid in normalizer.id_to_node]
+    # Convert path to coordinates using normalizer method
+    path_coords = []
+    for nid in path_ids:
+        coords = normalizer.to_coords(nid)
+        if coords is not None:
+            path_coords.append(coords)
 
     elapsed = time.perf_counter() - start_time
     segments_covered = len(segment_indices) - len(unreachable)

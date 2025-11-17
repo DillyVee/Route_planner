@@ -38,8 +38,9 @@ try:
     from drpp_core import cluster_segments as cluster_segments_v4
     from drpp_core import estimate_optimal_workers as estimate_optimal_workers_v4
     from drpp_core import parallel_cluster_routing as parallel_cluster_routing_v4
-    from drpp_core import parallel_cluster_routing_ondemand as parallel_cluster_routing_v4_ondemand
+    from drpp_core import sequential_cluster_routing_ondemand as parallel_cluster_routing_v4_ondemand
     from drpp_core.logging_config import setup_logging as setup_drpp_logging
+    from drpp_core.path_reconstruction import reconstruct_path
 
     V4_AVAILABLE = True
     print("✅ Using Production V4 DRPP Solver with ON-DEMAND mode (FASTEST)")
@@ -380,8 +381,16 @@ class DirectedGraph:
             (distances, predecessors) where:
                 - distances[node_id] = shortest distance from source
                 - predecessors[node_id] = previous node in shortest path
+
+        Raises:
+            ValueError: If source_id is out of bounds
         """
         n = len(self.id_to_node)
+
+        # Validate source_id bounds
+        if source_id < 0 or source_id >= n:
+            raise ValueError(f"source_id {source_id} out of bounds [0, {n})")
+
         dist = [float("inf")] * n
         prev = [-1] * n
         dist[source_id] = 0.0
@@ -417,14 +426,25 @@ class DirectedGraph:
         if dist[t] == float("inf"):
             return None, float("inf")
 
-        cur = t
-        rev = []
-        while cur != -1:
-            rev.append(cur)
-            cur = prev[cur]
-        rev.reverse()
+        # Use robust path reconstruction with cycle detection
+        if V4_AVAILABLE:
+            path_ids = reconstruct_path(prev, s, t)
+            if not path_ids:
+                return None, float("inf")
+        else:
+            # Fallback to simple reconstruction with iteration limit
+            cur = t
+            rev = []
+            max_iterations = len(self.id_to_node)
+            for _ in range(max_iterations):
+                rev.append(cur)
+                if cur == -1:
+                    break
+                cur = prev[cur]
+            rev.reverse()
+            path_ids = rev
 
-        coords = [self.id_to_node[i] for i in rev]
+        coords = [self.id_to_node[i] for i in path_ids]
         return coords, dist[t]
 
 

@@ -453,18 +453,17 @@ def estimate_optimal_workers(
     return workers
 
 
-def parallel_cluster_routing_ondemand(
+def sequential_cluster_routing_ondemand(
     graph: Any,
     required_edges: List[Tuple],
     clusters: Dict[ClusterID, List[SegmentIndex]],
     cluster_order: List[ClusterID],
     start_node: Union[Coordinate, NodeID],
-    num_workers: Optional[int] = None,
     progress_callback: Optional[Callable[[int, int], None]] = None,
     lookahead_depth: int = 1,
     max_search_distance: Optional[float] = None,
 ) -> List[PathResult]:
-    """Route through clusters in parallel using on-demand Dijkstra (MUCH faster).
+    """Route through clusters sequentially using on-demand Dijkstra (MUCH faster).
 
     This version bypasses distance matrix precomputation and uses on-demand
     routing for all clusters. This is 10-100x faster for large datasets.
@@ -479,7 +478,6 @@ def parallel_cluster_routing_ondemand(
         clusters: Mapping from cluster ID to segment indices
         cluster_order: Order in which to process clusters
         start_node: Global starting position
-        num_workers: Number of worker processes (default: CPU count - 1)
         progress_callback: Optional function(completed, total) for progress
         lookahead_depth: Number of steps to look ahead (1-3). Higher considers future connectivity
         max_search_distance: Maximum distance to search (meters). Limits Dijkstra exploration
@@ -488,13 +486,12 @@ def parallel_cluster_routing_ondemand(
         List of PathResult objects in cluster_order
 
     Example:
-        >>> results = parallel_cluster_routing_ondemand(
+        >>> results = sequential_cluster_routing_ondemand(
         ...     graph=graph,
         ...     required_edges=edges,
         ...     clusters=clusters,
         ...     cluster_order=[0, 1, 2],
-        ...     start_node=(40.7, -74.0),
-        ...     num_workers=4
+        ...     start_node=(40.7, -74.0)
         ... )
         >>> print(f"10-100x faster than matrix precomputation!")
 
@@ -503,11 +500,8 @@ def parallel_cluster_routing_ondemand(
         For 100+ clusters, this is faster than parallel routing with
         matrix precomputation due to avoiding the O(n²) matrix computation.
     """
-    if num_workers is None:
-        num_workers = max(1, multiprocessing.cpu_count() - 1)
-
     logger.info(
-        f"Starting ON-DEMAND parallel routing: {len(cluster_order)} clusters, "
+        f"Starting ON-DEMAND sequential routing: {len(cluster_order)} clusters, "
         f"bypassing matrix precomputation for maximum speed"
     )
 
@@ -545,8 +539,12 @@ def parallel_cluster_routing_ondemand(
             results.append(result)
 
             # Update start_node for next cluster (use end of this cluster's path)
-            if result.path:
+            if result.path and len(result.path) > 0:
                 start_node = result.path[-1]
+            else:
+                logger.warning(
+                    f"Cluster {cluster_id} returned empty path, keeping start_node unchanged"
+                )
 
         except Exception as e:
             logger.error(f"Cluster {cluster_id} failed: {e}", exc_info=True)
