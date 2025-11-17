@@ -12,11 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import unittest  # noqa: E402
 
-from drpp_core.clustering import (  # noqa: E402
-    haversine,
-    cluster_segments_grid,
-    ClusteringMethod,
-)
+from drpp_core.clustering import ClusteringMethod, cluster_segments_grid, haversine  # noqa: E402
 
 
 class TestHaversine(unittest.TestCase):

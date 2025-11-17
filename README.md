@@ -4,6 +4,9 @@
 
 [![Python](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![CI](https://github.com/DillyVee/Route_planner/actions/workflows/ci.yml/badge.svg)](https://github.com/DillyVee/Route_planner/actions)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit&logoColor=white)](https://github.com/pre-commit/pre-commit)
 
 ## Overview
 
@@ -16,20 +19,47 @@ Route Planner is an industrial-strength solver for the Directed Rural Postman Pr
 - **📊 Rich Visualizations** - Interactive HTML maps with segment IDs, route steps, and color-coded requirements
 - **🔄 Multiple Algorithms** - Choose from V4 Greedy, RFCS, Legacy Greedy, or Hungarian based on your needs
 - **⚡ Parallel Processing** - Multi-core support for large datasets with geographic clustering
-- **📦 Production Ready** - Type hints, comprehensive tests, logging, and error handling
+- **📦 Production Ready** - Type hints, comprehensive tests, logging, error handling, and CI/CD
+- **🛡️ Robust Error Handling** - Custom exception hierarchy with clear error messages
+- **🌍 Geographic Utilities** - Haversine distance, coordinate snapping, and bearing calculations
 
 ## Quick Start
 
 ### Installation
+
+#### For End Users (GUI Application)
 
 ```bash
 # Clone the repository
 git clone https://github.com/DillyVee/Route_planner.git
 cd Route_planner
 
-# Install dependencies
-pip install -r requirements_production.txt
+# Install with GUI and all features
+pip install -e ".[all]"
 ```
+
+#### For Developers
+
+```bash
+# Clone the repository
+git clone https://github.com/DillyVee/Route_planner.git
+cd Route_planner
+
+# Install with development tools
+pip install -e ".[dev,all]"
+
+# Install pre-commit hooks (recommended)
+pre-commit install
+```
+
+#### Core Library Only
+
+```bash
+# Install minimal dependencies (no GUI, no visualization)
+pip install -e .
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed development setup instructions.
 
 ### Basic Usage
 
@@ -111,7 +141,9 @@ from drpp_core import (
     greedy_route_cluster,
     cluster_segments,
     ClusteringMethod,
-    compute_distance_matrix
+    compute_distance_matrix,
+    haversine,
+    snap_coordinate
 )
 
 # Use V4 core API directly
@@ -132,6 +164,28 @@ clusters = cluster_segments(
     eps_km=2.0,  # 2km radius
     min_samples=3
 )
+
+# Geographic utilities
+from drpp_core import haversine, snap_coordinate, calculate_bearing
+
+# Calculate distance between two points
+distance_m = haversine((37.7749, -122.4194), (34.0522, -118.2437))
+print(f"Distance: {distance_m / 1000:.1f} km")  # ~559.1 km
+
+# Snap coordinates to eliminate floating-point errors
+coord = snap_coordinate(37.774929999, -122.419415001, precision=6)
+
+# Calculate bearing
+bearing = calculate_bearing((37.7749, -122.4194), (34.0522, -118.2437))
+print(f"Bearing: {bearing:.1f}°")  # ~126.5°
+
+# Robust error handling with custom exceptions
+from drpp_core import KMLParseError, RoutingError, handle_parse_error
+
+try:
+    result = greedy_route_cluster(...)
+except RoutingError as e:
+    print(f"Routing failed: {e}")
 ```
 
 ## Performance

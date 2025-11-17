@@ -5,14 +5,14 @@ Provides decorators and context managers for timing, memory profiling,
 and identifying bottlenecks.
 """
 
-import time
-import functools
-from typing import Callable, Optional, Any, Dict
-from contextlib import contextmanager
 import cProfile
-import pstats
+import functools
 import io
+import pstats
+import time
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Any, Callable, Dict, Optional
 
 from .logging_config import get_logger
 
@@ -230,8 +230,9 @@ def track_memory(operation_name: str):
         INFO - matrix_computation: 125.3 MB increase
     """
     try:
-        import psutil  # type: ignore[import-untyped]
         import os
+
+        import psutil  # type: ignore[import-untyped]
 
         process = psutil.Process(os.getpid())
         mem_before = process.memory_info().rss / 1024 / 1024  # MB

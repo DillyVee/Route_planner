@@ -5,9 +5,9 @@ This module provides type aliases and dataclasses for type safety and clarity.
 All coordinate operations should use these types for consistency.
 """
 
-from typing import Tuple, List, Dict, Optional, NamedTuple, Union
 from dataclasses import dataclass
 from enum import Enum
+from typing import Dict, List, NamedTuple, Optional, Tuple, Union
 
 # Type Aliases for clarity (Python 3.9 compatible)
 Coordinate = Tuple[float, float]  # (latitude, longitude) in decimal degrees

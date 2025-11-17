@@ -21,11 +21,10 @@ Usage:
     )
 """
 
-from typing import Dict, List, Tuple, Optional, Set
+import logging
 from dataclasses import dataclass
 from pathlib import Path
-import json
-import logging
+from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -199,6 +198,7 @@ class DRPPPipeline:
         - MapPlusSystemData schema (LABEL_EXPR, LABEL_TEXT)
         """
         import xml.etree.ElementTree as ET
+
         from osm_speed_integration import snap_coord, snap_coords_list
 
         self.logger.info(f"  Parsing {kml_file}...")
@@ -210,7 +210,7 @@ class DRPPPipeline:
             self.logger.warning(f"XML parsing error: {e}, attempting fixes...")
             import re
 
-            with open(kml_file, "r", encoding="utf-8", errors="ignore") as f:
+            with open(kml_file, encoding="utf-8", errors="ignore") as f:
                 content = f.read()
             content = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]", "", content)
             content = re.sub(r"&(?!(amp|lt|gt|quot|apos);)", "&amp;", content)
@@ -419,7 +419,7 @@ class DRPPPipeline:
     def _solve_drpp(self, algorithm: str) -> List[RouteStep]:
         """Solve DRPP with specified algorithm."""
         # Import routing functions
-        from Route_Planner import V4_AVAILABLE, RFCS_AVAILABLE, GREEDY_AVAILABLE
+        from Route_Planner import GREEDY_AVAILABLE, RFCS_AVAILABLE, V4_AVAILABLE
 
         # Build required edges list from segments
         required_edges = []

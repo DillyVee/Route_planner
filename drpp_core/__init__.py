@@ -12,12 +12,32 @@ Author: Refactored to production standards
 Version: 4.0.0
 """
 
-from .types import Coordinate, NodeID, SegmentIndex, PathResult, ClusterResult
+from .clustering import ClusteringMethod, cluster_segments
 from .distance_matrix import DistanceMatrix, compute_distance_matrix
-from .path_reconstruction import reconstruct_path
-from .clustering import cluster_segments, ClusteringMethod
+from .exceptions import (
+    ClusteringError,
+    ConfigurationError,
+    DisconnectedGraphError,
+    DRPPError,
+    GraphBuildError,
+    GraphError,
+    KMLParseError,
+    NoPathError,
+    OptimizationError,
+    OSMError,
+    OSMMatchingError,
+    OverpassAPIError,
+    ParseError,
+    RoutingError,
+    UnreachableSegmentError,
+    ValidationError,
+    VisualizationError,
+)
+from .geo import calculate_bearing, haversine, snap_coordinate
 from .greedy_router import greedy_route_cluster
-from .parallel_executor import parallel_cluster_routing, estimate_optimal_workers
+from .parallel_executor import estimate_optimal_workers, parallel_cluster_routing
+from .path_reconstruction import reconstruct_path
+from .types import ClusterResult, Coordinate, NodeID, PathResult, SegmentIndex
 
 __all__ = [
     # Types
@@ -39,6 +59,28 @@ __all__ = [
     # Parallel Processing
     "parallel_cluster_routing",
     "estimate_optimal_workers",
+    # Geographic Utilities
+    "haversine",
+    "snap_coordinate",
+    "calculate_bearing",
+    # Exceptions
+    "DRPPError",
+    "ParseError",
+    "KMLParseError",
+    "ValidationError",
+    "GraphError",
+    "GraphBuildError",
+    "DisconnectedGraphError",
+    "RoutingError",
+    "NoPathError",
+    "UnreachableSegmentError",
+    "OptimizationError",
+    "ClusteringError",
+    "OSMError",
+    "OverpassAPIError",
+    "OSMMatchingError",
+    "VisualizationError",
+    "ConfigurationError",
 ]
 
 __version__ = "4.0.0"

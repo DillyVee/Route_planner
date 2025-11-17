@@ -5,21 +5,21 @@ Implements nearest-neighbor greedy approach with fallback strategies
 for unreachable segments.
 """
 
-from typing import List, Tuple, Set, Optional, Any, Dict, Union
 from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
+from .distance_matrix import DistanceMatrix
+from .logging_config import LogTimer, get_logger
+from .path_reconstruction import reconstruct_path
 from .types import (
     Coordinate,
-    NodeID,
-    SegmentIndex,
     Distance,
-    UnreachableSegment,
-    UnreachableReason,
+    NodeID,
     PathResult,
+    SegmentIndex,
+    UnreachableReason,
+    UnreachableSegment,
 )
-from .distance_matrix import DistanceMatrix
-from .path_reconstruction import reconstruct_path
-from .logging_config import get_logger, LogTimer
 
 logger = get_logger(__name__)
 
