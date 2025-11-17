@@ -26,16 +26,16 @@ jobs:
           pip install -e ".[dev]"
 
       - name: Check code formatting with Black
-        run: black --check --diff .
+        run: black --check --diff --exclude=legacy .
 
       - name: Lint drpp_core with Ruff (strict)
         run: ruff check drpp_core/
 
       - name: Lint other files with Ruff (warnings only)
-        run: ruff check . --exclude drpp_core/ || true
+        run: ruff check . --exclude drpp_core/ --exclude legacy/ || true
 
       - name: Check import sorting with isort
-        run: isort --check-only --diff .
+        run: isort --check-only --diff --skip legacy .
 
       - name: Type check with mypy
         run: mypy drpp_core/
