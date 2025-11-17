@@ -5,16 +5,16 @@ This module provides type aliases and dataclasses for type safety and clarity.
 All coordinate operations should use these types for consistency.
 """
 
-from typing import Tuple, List, Dict, Optional, NamedTuple, TypeAlias
+from typing import Tuple, List, Dict, Optional, NamedTuple, Union
 from dataclasses import dataclass
 from enum import Enum
 
-# Type Aliases for clarity
-Coordinate: TypeAlias = Tuple[float, float]  # (latitude, longitude) in decimal degrees
-NodeID: TypeAlias = int  # Integer node identifier
-SegmentIndex: TypeAlias = int  # Index into required_edges list
-Distance: TypeAlias = float  # Distance in meters
-ClusterID: TypeAlias = int  # Cluster identifier
+# Type Aliases for clarity (Python 3.9 compatible)
+Coordinate = Tuple[float, float]  # (latitude, longitude) in decimal degrees
+NodeID = int  # Integer node identifier
+SegmentIndex = int  # Index into required_edges list
+Distance = float  # Distance in meters
+ClusterID = int  # Cluster identifier
 
 
 class PathResult(NamedTuple):
@@ -28,6 +28,7 @@ class PathResult(NamedTuple):
         segments_unreachable: Number of segments that couldn't be reached
         computation_time: Time taken to compute this route in seconds
     """
+
     path: List[Coordinate]
     distance: Distance
     cluster_id: ClusterID
@@ -44,6 +45,7 @@ class ClusterResult(NamedTuple):
         noise_count: Number of segments classified as noise
         method_used: Name of clustering method that was used
     """
+
     clusters: Dict[ClusterID, List[SegmentIndex]]
     noise_count: int
     method_used: str
@@ -62,9 +64,10 @@ class SegmentMetadata:
         speed_limit: Optional speed limit in km/h
         highway_type: Optional OSM highway type
     """
+
     index: SegmentIndex
-    start_node: Coordinate | NodeID
-    end_node: Coordinate | NodeID
+    start_node: Union[Coordinate, NodeID]
+    end_node: Union[Coordinate, NodeID]
     coordinates: List[Coordinate]
     length: Distance
     speed_limit: Optional[float] = None
@@ -81,6 +84,7 @@ class UnreachableSegment:
         attempted_from: Node ID from which routing was attempted
         distance_to_nearest: Distance to nearest reachable point (if known)
     """
+
     segment_index: SegmentIndex
     reason: str
     attempted_from: Optional[NodeID] = None
@@ -98,6 +102,7 @@ class UnreachableSegment:
 
 class UnreachableReason(Enum):
     """Standard reason codes for unreachable segments."""
+
     NO_PATH_IN_MATRIX = "no_path_in_precomputed_matrix"
     NO_PATH_FROM_CURRENT = "no_path_from_current_position"
     DISCONNECTED_COMPONENT = "disconnected_graph_component"
@@ -116,6 +121,7 @@ class GraphInterface:
         id_to_node: Mapping from integer node IDs to coordinates
         dijkstra: Function that computes shortest paths from a source node
     """
+
     node_to_id: Dict[Coordinate, NodeID]
     id_to_node: Dict[NodeID, Coordinate]
 

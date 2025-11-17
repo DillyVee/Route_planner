@@ -4,16 +4,18 @@ Unit tests for clustering module.
 Tests geographic distance calculations and clustering methods.
 """
 
-import unittest
 import sys
 from pathlib import Path
 
+# Add parent directory to path before importing drpp_core
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from drpp_core.clustering import (
+import unittest  # noqa: E402
+
+from drpp_core.clustering import (  # noqa: E402
     haversine,
     cluster_segments_grid,
-    ClusteringMethod
+    ClusteringMethod,
 )
 
 
@@ -75,19 +77,19 @@ class TestGridClustering(unittest.TestCase):
         """Create sample segments for testing."""
         self.segments = [
             {
-                'start': (40.0, -74.0),
-                'end': (40.01, -74.01),
-                'coords': [(40.0, -74.0), (40.01, -74.01)]
+                "start": (40.0, -74.0),
+                "end": (40.01, -74.01),
+                "coords": [(40.0, -74.0), (40.01, -74.01)],
             },
             {
-                'start': (40.02, -74.02),
-                'end': (40.03, -74.03),
-                'coords': [(40.02, -74.02), (40.03, -74.03)]
+                "start": (40.02, -74.02),
+                "end": (40.03, -74.03),
+                "coords": [(40.02, -74.02), (40.03, -74.03)],
             },
             {
-                'start': (40.5, -74.5),
-                'end': (40.51, -74.51),
-                'coords': [(40.5, -74.5), (40.51, -74.51)]
+                "start": (40.5, -74.5),
+                "end": (40.51, -74.51),
+                "coords": [(40.5, -74.5), (40.51, -74.51)],
             },
         ]
 
@@ -97,7 +99,7 @@ class TestGridClustering(unittest.TestCase):
 
         self.assertIsNotNone(result)
         self.assertGreater(len(result.clusters), 0)
-        self.assertEqual(result.method_used, 'grid')
+        self.assertEqual(result.method_used, "grid")
 
     def test_single_cluster(self):
         """Test grid with single cell."""
@@ -162,20 +164,24 @@ class TestClusteringIntegration(unittest.TestCase):
         # Create two clear clusters
         cluster1 = [
             {
-                'start': (40.0 + i*0.01, -74.0 + i*0.01),
-                'end': (40.0 + i*0.01 + 0.001, -74.0 + i*0.01 + 0.001),
-                'coords': [(40.0 + i*0.01, -74.0 + i*0.01),
-                          (40.0 + i*0.01 + 0.001, -74.0 + i*0.01 + 0.001)]
+                "start": (40.0 + i * 0.01, -74.0 + i * 0.01),
+                "end": (40.0 + i * 0.01 + 0.001, -74.0 + i * 0.01 + 0.001),
+                "coords": [
+                    (40.0 + i * 0.01, -74.0 + i * 0.01),
+                    (40.0 + i * 0.01 + 0.001, -74.0 + i * 0.01 + 0.001),
+                ],
             }
             for i in range(5)
         ]
 
         cluster2 = [
             {
-                'start': (41.0 + i*0.01, -75.0 + i*0.01),
-                'end': (41.0 + i*0.01 + 0.001, -75.0 + i*0.01 + 0.001),
-                'coords': [(41.0 + i*0.01, -75.0 + i*0.01),
-                          (41.0 + i*0.01 + 0.001, -75.0 + i*0.01 + 0.001)]
+                "start": (41.0 + i * 0.01, -75.0 + i * 0.01),
+                "end": (41.0 + i * 0.01 + 0.001, -75.0 + i * 0.01 + 0.001),
+                "coords": [
+                    (41.0 + i * 0.01, -75.0 + i * 0.01),
+                    (41.0 + i * 0.01 + 0.001, -75.0 + i * 0.01 + 0.001),
+                ],
             }
             for i in range(5)
         ]
@@ -190,5 +196,5 @@ class TestClusteringIntegration(unittest.TestCase):
         self.assertGreaterEqual(len(result.clusters), 2)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

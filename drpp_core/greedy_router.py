@@ -5,16 +5,21 @@ Implements nearest-neighbor greedy approach with fallback strategies
 for unreachable segments.
 """
 
-from typing import List, Tuple, Set, Optional, Any, Dict
+from typing import List, Tuple, Set, Optional, Any, Dict, Union
 from dataclasses import dataclass
 
 from .types import (
-    Coordinate, NodeID, SegmentIndex, Distance,
-    UnreachableSegment, UnreachableReason, PathResult
+    Coordinate,
+    NodeID,
+    SegmentIndex,
+    Distance,
+    UnreachableSegment,
+    UnreachableReason,
+    PathResult,
 )
 from .distance_matrix import DistanceMatrix
 from .path_reconstruction import reconstruct_path
-from .logging_config import get_logger, LogTimer, log_exception
+from .logging_config import get_logger, LogTimer
 
 logger = get_logger(__name__)
 
@@ -30,10 +35,11 @@ class NodeNormalizer:
         node_to_id: Mapping from coordinates to node IDs
         id_to_node: Mapping from node IDs to coordinates
     """
+
     node_to_id: Dict[Coordinate, NodeID]
     id_to_node: Dict[NodeID, Coordinate]
 
-    def to_id(self, node: Coordinate | NodeID) -> Optional[NodeID]:
+    def to_id(self, node: Union[Coordinate, NodeID]) -> Optional[NodeID]:
         """Convert node (coordinate or ID) to ID.
 
         Args:
@@ -50,7 +56,7 @@ class NodeNormalizer:
             return node
         return self.node_to_id.get(node)
 
-    def to_coords(self, node: Coordinate | NodeID) -> Optional[Coordinate]:
+    def to_coords(self, node: Union[Coordinate, NodeID]) -> Optional[Coordinate]:
         """Convert node (ID or coordinate) to coordinate.
 
         Args:
@@ -88,10 +94,8 @@ def _calculate_segment_length(coordinates: List[Coordinate]) -> Distance:
         return 0.0
 
     from .clustering import haversine
-    return sum(
-        haversine(coordinates[i], coordinates[i + 1])
-        for i in range(len(coordinates) - 1)
-    )
+
+    return sum(haversine(coordinates[i], coordinates[i + 1]) for i in range(len(coordinates) - 1))
 
 
 def _try_dijkstra_fallback(
@@ -99,7 +103,7 @@ def _try_dijkstra_fallback(
     required_edges: List[Tuple],
     remaining: Set[SegmentIndex],
     current_id: NodeID,
-    normalizer: NodeNormalizer
+    normalizer: NodeNormalizer,
 ) -> Optional[Tuple[SegmentIndex, Distance, List[NodeID]]]:
     """Attempt to find nearest segment using live Dijkstra computation.
 
@@ -124,7 +128,7 @@ def _try_dijkstra_fallback(
         return None
 
     best_seg_idx: Optional[SegmentIndex] = None
-    best_dist = float('inf')
+    best_dist = float("inf")
     best_path_ids: Optional[List[NodeID]] = None
 
     for seg_idx in remaining:
@@ -143,7 +147,7 @@ def _try_dijkstra_fallback(
                 best_seg_idx = seg_idx
                 best_path_ids = path_ids
 
-    if best_seg_idx is not None:
+    if best_seg_idx is not None and best_path_ids is not None:
         logger.info(
             f"Dijkstra fallback succeeded: found segment {best_seg_idx} "
             f"at distance {best_dist:.1f}m"
@@ -158,7 +162,7 @@ def _greedy_route_ondemand(
     graph: Any,
     required_edges: List[Tuple],
     segment_indices: List[SegmentIndex],
-    start_node: Coordinate | NodeID
+    start_node: Union[Coordinate, NodeID],
 ) -> PathResult:
     """Route using on-demand Dijkstra (no precomputation).
 
@@ -182,6 +186,7 @@ def _greedy_route_ondemand(
         PathResult with route and diagnostics
     """
     import time
+
     start_time = time.perf_counter()
 
     # Setup normalizer
@@ -211,18 +216,19 @@ def _greedy_route_ondemand(
                 logger.error(f"Dijkstra failed at iteration {iteration}: {e}", exc_info=True)
                 # Mark all remaining as unreachable
                 for seg_idx in remaining:
-                    unreachable.append(UnreachableSegment(
-                        segment_index=seg_idx,
-                        reason=UnreachableReason.NO_PATH_FROM_CURRENT.value,
-                        attempted_from=current_id
-                    ))
+                    unreachable.append(
+                        UnreachableSegment(
+                            segment_index=seg_idx,
+                            reason=UnreachableReason.NO_PATH_FROM_CURRENT.value,
+                            attempted_from=current_id,
+                        )
+                    )
                 break
 
             # Find nearest reachable segment
             best_seg_idx: Optional[SegmentIndex] = None
-            best_dist = float('inf')
+            best_dist = float("inf")
             best_path_ids: Optional[List[NodeID]] = None
-            best_start_id: Optional[NodeID] = None
 
             for seg_idx in remaining:
                 segment_start = required_edges[seg_idx][0]
@@ -242,7 +248,6 @@ def _greedy_route_ondemand(
                             best_dist = dist
                             best_seg_idx = seg_idx
                             best_path_ids = path
-                            best_start_id = segment_start_id
 
             # No segment found - all remaining are unreachable
             if best_seg_idx is None:
@@ -251,11 +256,13 @@ def _greedy_route_ondemand(
                     f"from node {current_id} at iteration {iteration}"
                 )
                 for seg_idx in remaining:
-                    unreachable.append(UnreachableSegment(
-                        segment_index=seg_idx,
-                        reason=UnreachableReason.NO_PATH_FROM_CURRENT.value,
-                        attempted_from=current_id
-                    ))
+                    unreachable.append(
+                        UnreachableSegment(
+                            segment_index=seg_idx,
+                            reason=UnreachableReason.NO_PATH_FROM_CURRENT.value,
+                            attempted_from=current_id,
+                        )
+                    )
                 break
 
             # Route to best segment
@@ -266,10 +273,11 @@ def _greedy_route_ondemand(
 
             if segment_end_id is None:
                 logger.error(f"Segment {best_seg_idx} has invalid end node")
-                unreachable.append(UnreachableSegment(
-                    segment_index=best_seg_idx,
-                    reason=UnreachableReason.INVALID_NODE_ID.value
-                ))
+                unreachable.append(
+                    UnreachableSegment(
+                        segment_index=best_seg_idx, reason=UnreachableReason.INVALID_NODE_ID.value
+                    )
+                )
                 remaining.remove(best_seg_idx)
                 continue
 
@@ -290,8 +298,10 @@ def _greedy_route_ondemand(
             if iteration % 100 == 0:
                 elapsed = time.perf_counter() - start_time
                 rate = iteration / elapsed if elapsed > 0 else 0
+                covered = len(segment_indices) - len(remaining)
+                total = len(segment_indices)
                 logger.debug(
-                    f"Iteration {iteration}: covered {len(segment_indices) - len(remaining)}/{len(segment_indices)} "
+                    f"Iteration {iteration}: covered {covered}/{total} "
                     f"segments [{rate:.1f} segments/sec]"
                 )
 
@@ -324,7 +334,7 @@ def _greedy_route_ondemand(
         cluster_id=-1,  # Set by caller
         segments_covered=segments_covered,
         segments_unreachable=len(unreachable),
-        computation_time=elapsed
+        computation_time=elapsed,
     )
 
 
@@ -332,11 +342,11 @@ def greedy_route_cluster(
     graph: Optional[Any],
     required_edges: List[Tuple],
     segment_indices: List[SegmentIndex],
-    start_node: Coordinate | NodeID,
+    start_node: Union[Coordinate, NodeID],
     distance_matrix: Optional[DistanceMatrix] = None,
     normalizer: Optional[NodeNormalizer] = None,
     enable_fallback: bool = True,
-    use_ondemand: bool = False
+    use_ondemand: bool = False,
 ) -> PathResult:
     """Route through segments using greedy nearest-neighbor approach.
 
@@ -369,6 +379,7 @@ def greedy_route_cluster(
         >>> print(f"Route: {result.distance:.1f}m, covered {result.segments_covered} segments")
     """
     import time
+
     start_time = time.perf_counter()
 
     if not segment_indices:
@@ -379,15 +390,13 @@ def greedy_route_cluster(
             cluster_id=-1,
             segments_covered=0,
             segments_unreachable=0,
-            computation_time=0.0
+            computation_time=0.0,
         )
 
     # Use on-demand routing for large clusters (avoids expensive all-pairs precomputation)
     if use_ondemand:
         logger.info(f"Using on-demand Dijkstra routing for {len(segment_indices)} segments")
-        return _greedy_route_ondemand(
-            graph, required_edges, segment_indices, start_node
-        )
+        return _greedy_route_ondemand(graph, required_edges, segment_indices, start_node)
 
     # Compute matrix if not provided
     if distance_matrix is None or normalizer is None:
@@ -408,13 +417,13 @@ def greedy_route_cluster(
 
         # If too many endpoints, switch to on-demand mode automatically
         if len(node_ids) > 1000:
+            num_nodes = len(node_ids)
             logger.warning(
-                f"Cluster has {len(node_ids)} segment endpoints. "
-                f"Switching to on-demand mode (precomputing {len(node_ids)}² distances would be very slow)"
+                f"Cluster has {num_nodes} segment endpoints. "
+                f"Switching to on-demand mode (precomputing {num_nodes}² "
+                f"distances would be very slow)"
             )
-            return _greedy_route_ondemand(
-                graph, required_edges, segment_indices, start_node
-            )
+            return _greedy_route_ondemand(graph, required_edges, segment_indices, start_node)
 
         logger.info(
             f"Computing distance matrix for {len(segment_indices)} segments "
@@ -462,8 +471,7 @@ def greedy_route_cluster(
         raise ValueError(f"Start node {start_node} has no valid ID")
 
     logger.debug(
-        f"Starting greedy routing: {len(segment_indices)} segments "
-        f"from node {current_id}"
+        f"Starting greedy routing: {len(segment_indices)} segments " f"from node {current_id}"
     )
 
     # Main greedy loop
@@ -472,7 +480,7 @@ def greedy_route_cluster(
         while remaining:
             iteration += 1
             best_seg_idx: Optional[SegmentIndex] = None
-            best_approach_dist = float('inf')
+            best_approach_dist = float("inf")
             best_approach_path_ids: Optional[List[NodeID]] = None
 
             # Find nearest reachable segment
@@ -513,24 +521,27 @@ def greedy_route_cluster(
                             f"from node {current_id}"
                         )
                         for seg_idx in remaining:
-                            unreachable.append(UnreachableSegment(
-                                segment_index=seg_idx,
-                                reason=UnreachableReason.NO_PATH_FROM_CURRENT.value,
-                                attempted_from=current_id
-                            ))
+                            unreachable.append(
+                                UnreachableSegment(
+                                    segment_index=seg_idx,
+                                    reason=UnreachableReason.NO_PATH_FROM_CURRENT.value,
+                                    attempted_from=current_id,
+                                )
+                            )
                         break
                 else:
                     # Fallback disabled
                     logger.error(
-                        f"No path in matrix for {len(remaining)} segments "
-                        f"(fallback disabled)"
+                        f"No path in matrix for {len(remaining)} segments " f"(fallback disabled)"
                     )
                     for seg_idx in remaining:
-                        unreachable.append(UnreachableSegment(
-                            segment_index=seg_idx,
-                            reason=UnreachableReason.NO_PATH_IN_MATRIX.value,
-                            attempted_from=current_id
-                        ))
+                        unreachable.append(
+                            UnreachableSegment(
+                                segment_index=seg_idx,
+                                reason=UnreachableReason.NO_PATH_IN_MATRIX.value,
+                                attempted_from=current_id,
+                            )
+                        )
                     break
 
             # Route to best segment
@@ -542,10 +553,12 @@ def greedy_route_cluster(
                 segment_end_id = normalizer.to_id(segment_end)
                 if segment_end_id is None:
                     logger.error(f"Segment {best_seg_idx} has invalid end node")
-                    unreachable.append(UnreachableSegment(
-                        segment_index=best_seg_idx,
-                        reason=UnreachableReason.INVALID_NODE_ID.value
-                    ))
+                    unreachable.append(
+                        UnreachableSegment(
+                            segment_index=best_seg_idx,
+                            reason=UnreachableReason.INVALID_NODE_ID.value,
+                        )
+                    )
                     remaining.remove(best_seg_idx)
                     continue
 
@@ -569,11 +582,7 @@ def greedy_route_cluster(
                     )
 
     # Convert path to coordinates
-    path_coords = [
-        normalizer.id_to_node[nid]
-        for nid in path_ids
-        if nid in normalizer.id_to_node
-    ]
+    path_coords = [normalizer.id_to_node[nid] for nid in path_ids if nid in normalizer.id_to_node]
 
     elapsed = time.perf_counter() - start_time
     segments_covered = len(segment_indices) - len(unreachable)
@@ -596,5 +605,5 @@ def greedy_route_cluster(
         cluster_id=-1,  # Set by caller
         segments_covered=segments_covered,
         segments_unreachable=len(unreachable),
-        computation_time=elapsed
+        computation_time=elapsed,
     )

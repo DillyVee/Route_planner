@@ -21,24 +21,24 @@ from .parallel_executor import parallel_cluster_routing, estimate_optimal_worker
 
 __all__ = [
     # Types
-    'Coordinate',
-    'NodeID',
-    'SegmentIndex',
-    'PathResult',
-    'ClusterResult',
+    "Coordinate",
+    "NodeID",
+    "SegmentIndex",
+    "PathResult",
+    "ClusterResult",
     # Distance Matrix
-    'DistanceMatrix',
-    'compute_distance_matrix',
+    "DistanceMatrix",
+    "compute_distance_matrix",
     # Path Reconstruction
-    'reconstruct_path',
+    "reconstruct_path",
     # Clustering
-    'cluster_segments',
-    'ClusteringMethod',
+    "cluster_segments",
+    "ClusteringMethod",
     # Routing
-    'greedy_route_cluster',
+    "greedy_route_cluster",
     # Parallel Processing
-    'parallel_cluster_routing',
-    'estimate_optimal_workers',
+    "parallel_cluster_routing",
+    "estimate_optimal_workers",
 ]
 
-__version__ = '4.0.0'
+__version__ = "4.0.0"

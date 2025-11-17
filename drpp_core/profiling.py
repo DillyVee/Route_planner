@@ -20,7 +20,8 @@ logger = get_logger(__name__)
 
 # Try to import memory_profiler
 try:
-    from memory_profiler import profile as memory_profile
+    from memory_profiler import profile as memory_profile  # type: ignore  # noqa: F401
+
     MEMORY_PROFILER_AVAILABLE = True
 except ImportError:
     MEMORY_PROFILER_AVAILABLE = False
@@ -42,6 +43,7 @@ def time_function(func: Callable) -> Callable:
         ...     # do work
         ...     pass
     """
+
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         start = time.perf_counter()
@@ -55,10 +57,7 @@ def time_function(func: Callable) -> Callable:
     return wrapper
 
 
-def time_function_detailed(
-    log_args: bool = False,
-    log_result: bool = False
-) -> Callable:
+def time_function_detailed(log_args: bool = False, log_result: bool = False) -> Callable:
     """Decorator to time function with detailed logging.
 
     Args:
@@ -74,6 +73,7 @@ def time_function_detailed(
         ...     # do work
         ...     return result
     """
+
     def decorator(func: Callable) -> Callable:
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
@@ -87,9 +87,7 @@ def time_function_detailed(
                 elapsed = time.perf_counter() - start
 
                 if log_result:
-                    logger.info(
-                        f"{func.__name__} completed in {elapsed:.3f}s, result={result}"
-                    )
+                    logger.info(f"{func.__name__} completed in {elapsed:.3f}s, result={result}")
                 else:
                     logger.info(f"{func.__name__} completed in {elapsed:.3f}s")
 
@@ -97,10 +95,7 @@ def time_function_detailed(
 
             except Exception as e:
                 elapsed = time.perf_counter() - start
-                logger.error(
-                    f"{func.__name__} failed after {elapsed:.3f}s: {e}",
-                    exc_info=True
-                )
+                logger.error(f"{func.__name__} failed after {elapsed:.3f}s: {e}", exc_info=True)
                 raise
 
         return wrapper
@@ -146,18 +141,17 @@ class PerformanceTimer:
         """Stop timing and log."""
         if self.start_time is not None:
             self.elapsed = time.perf_counter() - self.start_time
-            logger.log(
-                self.log_level,
-                f"{self.operation_name}: {self.elapsed:.3f}s"
-            )
+            logger.log(self.log_level, f"{self.operation_name}: {self.elapsed:.3f}s")
         return False
 
     def __call__(self, func: Callable) -> Callable:
         """Use as decorator."""
+
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
             with self:
                 return func(*args, **kwargs)
+
         return wrapper
 
 
@@ -174,8 +168,8 @@ class ProfilerContext:
         self,
         operation_name: str,
         top_n: int = 20,
-        sort_by: str = 'cumulative',
-        output_file: Optional[Path] = None
+        sort_by: str = "cumulative",
+        output_file: Optional[Path] = None,
     ):
         """Initialize profiler.
 
@@ -236,7 +230,7 @@ def track_memory(operation_name: str):
         INFO - matrix_computation: 125.3 MB increase
     """
     try:
-        import psutil
+        import psutil  # type: ignore[import-untyped]
         import os
 
         process = psutil.Process(os.getpid())

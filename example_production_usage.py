@@ -21,7 +21,7 @@ from drpp_core import (
     ClusteringMethod,
     estimate_optimal_workers,
     PathResult,
-    ClusterResult
+    ClusterResult,
 )
 from drpp_core.logging_config import setup_logging, LogTimer
 from drpp_core.profiling import BenchmarkRunner, track_memory
@@ -34,10 +34,7 @@ def main():
     # STEP 1: Configure Logging
     # ===================================================================
     logger = setup_logging(
-        level=logging.INFO,
-        log_file=Path("logs/drpp_example.log"),
-        console=True,
-        detailed=False
+        level=logging.INFO, log_file=Path("logs/drpp_example.log"), console=True, detailed=False
     )
 
     logger.info("=" * 60)
@@ -96,7 +93,7 @@ def main():
                 dummy_segments,
                 method=ClusteringMethod.GRID,  # Use GRID for demo (no sklearn needed)
                 grid_x=5,
-                grid_y=5
+                grid_y=5,
             )
 
     logger.info(f"Created {len(result.clusters)} clusters")
@@ -119,15 +116,15 @@ def main():
 
     # Estimate optimal workers
     num_workers = estimate_optimal_workers(
-        num_clusters=len(result.clusters),
-        num_segments=len(dummy_segments)
+        num_clusters=len(result.clusters), num_segments=len(dummy_segments)
     )
     logger.info(f"Using {num_workers} worker processes")
 
     # For demonstration, we can't actually route without a real graph
     logger.info("\nNOTE: Actual routing requires a real graph object.")
     logger.info("Example routing code:")
-    logger.info("""
+    logger.info(
+        """
     results: List[PathResult] = parallel_cluster_routing(
         graph=graph,
         required_edges=required_edges,
@@ -151,7 +148,8 @@ def main():
     total_time = sum(r.computation_time for r in results)
     logger.info(f"\\nTotal distance: {total_distance / 1000:.1f} km")
     logger.info(f"Total computation time: {total_time:.2f}s")
-    """)
+    """
+    )
 
     # ===================================================================
     # STEP 5: Performance Analysis
@@ -161,12 +159,14 @@ def main():
     logger.info("=" * 60)
 
     logger.info("To profile your code, use:")
-    logger.info("""
+    logger.info(
+        """
     from drpp_core.profiling import ProfilerContext
 
     with ProfilerContext("routing", top_n=20):
         results = parallel_cluster_routing(...)
-    """)
+    """
+    )
 
     # ===================================================================
     # STEP 6: Benchmarking (optional)
@@ -176,13 +176,15 @@ def main():
     logger.info("=" * 60)
 
     logger.info("To benchmark different approaches:")
-    logger.info("""
+    logger.info(
+        """
     bench = BenchmarkRunner()
     bench.add_scenario("greedy", lambda: parallel_cluster_routing(...))
     bench.add_scenario("optimized", lambda: optimized_routing(...))
     bench.run(iterations=5, warmup=2)
     bench.print_results()
-    """)
+    """
+    )
 
     logger.info("\n" + "=" * 60)
     logger.info("Example complete!")
@@ -204,15 +206,17 @@ def create_dummy_segments() -> List[Dict]:
         lat2 = lat + random.random() * 0.01
         lon2 = lon + random.random() * 0.01
 
-        segments.append({
-            'start': (lat, lon),
-            'end': (lat2, lon2),
-            'coords': [(lat, lon), (lat2, lon2)],
-            'speed_limit': random.choice([30, 40, 50, 60]),
-        })
+        segments.append(
+            {
+                "start": (lat, lon),
+                "end": (lat2, lon2),
+                "coords": [(lat, lon), (lat2, lon2)],
+                "speed_limit": random.choice([30, 40, 50, 60]),
+            }
+        )
 
     return segments
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

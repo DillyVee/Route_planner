@@ -16,7 +16,7 @@ def reconstruct_path(
     predecessors: List[Optional[NodeID]],
     source_id: NodeID,
     target_id: NodeID,
-    max_iterations: Optional[int] = None
+    max_iterations: Optional[int] = None,
 ) -> List[NodeID]:
     """Reconstruct shortest path from Dijkstra predecessor array.
 
@@ -126,11 +126,7 @@ def reconstruct_path(
     return []
 
 
-def validate_path(
-    path: List[NodeID],
-    source_id: NodeID,
-    target_id: NodeID
-) -> bool:
+def validate_path(path: List[NodeID], source_id: NodeID, target_id: NodeID) -> bool:
     """Validate that a path is correct.
 
     Args:
@@ -170,9 +166,7 @@ def validate_path(
 
 
 def reconstruct_path_safe(
-    predecessors: List[Optional[NodeID]],
-    source_id: NodeID,
-    target_id: NodeID
+    predecessors: List[Optional[NodeID]], source_id: NodeID, target_id: NodeID
 ) -> Optional[List[NodeID]]:
     """Safe wrapper around reconstruct_path that catches exceptions.
 

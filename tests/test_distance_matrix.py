@@ -4,13 +4,15 @@ Unit tests for distance matrix module.
 Tests both dict-based and numpy-based storage.
 """
 
-import unittest
 import sys
 from pathlib import Path
 
+# Add parent directory to path before importing drpp_core
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from drpp_core.distance_matrix import DistanceMatrix, MatrixStats
+import unittest  # noqa: E402
+
+from drpp_core.distance_matrix import DistanceMatrix, MatrixStats  # noqa: E402
 
 
 class TestDistanceMatrixDict(unittest.TestCase):
@@ -34,7 +36,7 @@ class TestDistanceMatrixDict(unittest.TestCase):
     def test_get_nonexistent_distance(self):
         """Test retrieving non-existent distance."""
         dist = self.matrix.get_distance(0, 2)
-        self.assertEqual(dist, float('inf'))
+        self.assertEqual(dist, float("inf"))
 
     def test_set_and_get_path_ids(self):
         """Test storing and retrieving paths as IDs."""
@@ -70,7 +72,7 @@ class TestDistanceMatrixDict(unittest.TestCase):
         stats = self.matrix.get_stats()
         self.assertIsInstance(stats, MatrixStats)
         self.assertEqual(stats.num_paths, 3)
-        self.assertEqual(stats.storage_type, 'dict')
+        self.assertEqual(stats.storage_type, "dict")
         self.assertGreater(stats.memory_bytes, 0)
 
 
@@ -80,7 +82,8 @@ class TestDistanceMatrixNumpy(unittest.TestCase):
     def setUp(self):
         """Create a numpy matrix for testing."""
         try:
-            import numpy as np
+            import numpy as np  # noqa: F401
+
             self.numpy_available = True
             self.matrix = DistanceMatrix(use_numpy=True, num_nodes=3)
             self.matrix.id_to_coords = {
@@ -106,7 +109,7 @@ class TestDistanceMatrixNumpy(unittest.TestCase):
             self.skipTest("NumPy not available")
 
         dist = self.matrix.get_distance(0, 2)
-        self.assertEqual(dist, float('inf'))
+        self.assertEqual(dist, float("inf"))
 
     def test_has_path(self):
         """Test checking if path exists with numpy."""
@@ -126,7 +129,7 @@ class TestDistanceMatrixNumpy(unittest.TestCase):
         self.matrix.set(0, 2, 200.0, [0, 1, 2])
 
         stats = self.matrix.get_stats()
-        self.assertEqual(stats.storage_type, 'numpy')
+        self.assertEqual(stats.storage_type, "numpy")
         self.assertGreater(stats.memory_bytes, 0)
 
 
@@ -138,10 +141,11 @@ class TestDistanceMatrixEdgeCases(unittest.TestCase):
         # This test depends on whether numpy is installed
         # If numpy is available, this should work; if not, should raise RuntimeError
         try:
-            import numpy as np
+            import numpy as np  # noqa: F401
+
             # NumPy available - should work
             matrix = DistanceMatrix(use_numpy=True, num_nodes=5)
-            self.assertEqual(matrix.storage_type, 'numpy')
+            self.assertEqual(matrix.storage_type, "numpy")
         except ImportError:
             # NumPy not available - should raise error
             with self.assertRaises(RuntimeError):
@@ -162,7 +166,7 @@ class TestDistanceMatrixEdgeCases(unittest.TestCase):
         """Test operations on empty matrix."""
         matrix = DistanceMatrix()
 
-        self.assertEqual(matrix.get_distance(0, 1), float('inf'))
+        self.assertEqual(matrix.get_distance(0, 1), float("inf"))
         self.assertEqual(matrix.get_path_ids(0, 1), [])
         self.assertFalse(matrix.has_path(0, 1))
 
@@ -170,5 +174,5 @@ class TestDistanceMatrixEdgeCases(unittest.TestCase):
         self.assertEqual(stats.num_paths, 0)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

@@ -42,6 +42,7 @@ class SegmentRequirement:
         coordinates: List of (lat, lon) points
         metadata: Additional KML data (speed, name, etc.)
     """
+
     segment_id: str
     forward_required: bool
     backward_required: bool
@@ -72,6 +73,7 @@ class RouteStep:
         coordinates: Path coordinates for this step
         distance_meters: Length of this step
     """
+
     step_number: int
     segment_id: Optional[str]
     direction: str
@@ -96,12 +98,14 @@ class DRPPPipeline:
         self.graph = None
         self.route_steps: List[RouteStep] = []
 
-    def run(self,
-            kml_file: Path,
-            algorithm: str = 'rfcs',
-            output_dir: Path = Path('./output'),
-            output_formats: List[str] = ['html', 'geojson'],
-            visualization_config: Optional[Dict] = None) -> Dict:
+    def run(
+        self,
+        kml_file: Path,
+        algorithm: str = "rfcs",
+        output_dir: Path = Path("./output"),
+        output_formats: List[str] = ["html", "geojson"],
+        visualization_config: Optional[Dict] = None,
+    ) -> Dict:
         """Run complete DRPP pipeline.
 
         Args:
@@ -129,9 +133,15 @@ class DRPPPipeline:
         self.logger.info("\n[1/5] Parsing KML and extracting segments...")
         self.segments = self._parse_kml(kml_file)
         self.logger.info(f"  ✓ Loaded {len(self.segments)} segments")
-        self.logger.info(f"  ✓ Forward-only: {sum(1 for s in self.segments if s.forward_required and not s.backward_required)}")
-        self.logger.info(f"  ✓ Backward-only: {sum(1 for s in self.segments if s.backward_required and not s.forward_required)}")
-        self.logger.info(f"  ✓ Two-way required: {sum(1 for s in self.segments if s.is_two_way_required)}")
+        self.logger.info(
+            f"  ✓ Forward-only: {sum(1 for s in self.segments if s.forward_required and not s.backward_required)}"
+        )
+        self.logger.info(
+            f"  ✓ Backward-only: {sum(1 for s in self.segments if s.backward_required and not s.forward_required)}"
+        )
+        self.logger.info(
+            f"  ✓ Two-way required: {sum(1 for s in self.segments if s.is_two_way_required)}"
+        )
 
         # Phase 2: Build graph
         self.logger.info("\n[2/5] Building directed graph...")
@@ -160,16 +170,18 @@ class DRPPPipeline:
         self.logger.info("=" * 80)
         self.logger.info(f"Total distance: {stats['total_distance'] / 1000:.1f} km")
         self.logger.info(f"Required coverage: {stats['coverage']:.1f}%")
-        self.logger.info(f"Deadhead distance: {stats['deadhead_distance'] / 1000:.1f} km ({stats['deadhead_percent']:.1f}%)")
+        self.logger.info(
+            f"Deadhead distance: {stats['deadhead_distance'] / 1000:.1f} km ({stats['deadhead_percent']:.1f}%)"
+        )
         self.logger.info(f"Output files: {len(output_files)}")
         self.logger.info("=" * 80)
 
         return {
-            'route_steps': self.route_steps,
-            'total_distance': stats['total_distance'],
-            'coverage': stats['coverage'],
-            'statistics': stats,
-            'output_files': output_files
+            "route_steps": self.route_steps,
+            "total_distance": stats["total_distance"],
+            "coverage": stats["coverage"],
+            "statistics": stats,
+            "output_files": output_files,
         }
 
     def _parse_kml(self, kml_file: Path) -> List[SegmentRequirement]:
@@ -197,33 +209,35 @@ class DRPPPipeline:
             # Try to fix common XML issues
             self.logger.warning(f"XML parsing error: {e}, attempting fixes...")
             import re
-            with open(kml_file, 'r', encoding='utf-8', errors='ignore') as f:
+
+            with open(kml_file, "r", encoding="utf-8", errors="ignore") as f:
                 content = f.read()
-            content = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', content)
-            content = re.sub(r'&(?!(amp|lt|gt|quot|apos);)', '&amp;', content)
+            content = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]", "", content)
+            content = re.sub(r"&(?!(amp|lt|gt|quot|apos);)", "&amp;", content)
             from io import StringIO
+
             tree = ET.parse(StringIO(content))
 
         root = tree.getroot()
         segments = []
         mapplus_format_detected = False
 
-        for idx, pm in enumerate(root.findall('.//{http://www.opengis.net/kml/2.2}Placemark')):
-            ls = pm.find('.//{http://www.opengis.net/kml/2.2}LineString')
+        for idx, pm in enumerate(root.findall(".//{http://www.opengis.net/kml/2.2}Placemark")):
+            ls = pm.find(".//{http://www.opengis.net/kml/2.2}LineString")
             if ls is None:
                 continue
 
             # Extract coordinates
-            coords_elem = ls.find('{http://www.opengis.net/kml/2.2}coordinates')
+            coords_elem = ls.find("{http://www.opengis.net/kml/2.2}coordinates")
             if coords_elem is None or coords_elem.text is None:
                 continue
 
             raw = coords_elem.text.strip()
-            pts = [p for p in raw.replace('\n', ' ').split() if p.strip()]
+            pts = [p for p in raw.replace("\n", " ").split() if p.strip()]
             coords = []
 
             for p in pts:
-                ps = p.split(',')
+                ps = p.split(",")
                 if len(ps) < 2:
                     continue
                 try:
@@ -243,61 +257,74 @@ class DRPPPipeline:
             segment_id = None
             oneway = None
 
-            ext = pm.find('{http://www.opengis.net/kml/2.2}ExtendedData')
+            ext = pm.find("{http://www.opengis.net/kml/2.2}ExtendedData")
             if ext is not None:
                 # Look for MapPlus schema data
-                for schema_data in ext.findall('{http://www.opengis.net/kml/2.2}SchemaData'):
-                    schema_url = schema_data.get('schemaUrl', '')
+                for schema_data in ext.findall("{http://www.opengis.net/kml/2.2}SchemaData"):
+                    schema_url = schema_data.get("schemaUrl", "")
 
                     # MapPlusCustomFeatureClass - main road segment attributes
-                    if 'MapPlusCustomFeatureClass' in schema_url:
+                    if "MapPlusCustomFeatureClass" in schema_url:
                         mapplus_format_detected = True
-                        for simple_data in schema_data.findall('{http://www.opengis.net/kml/2.2}SimpleData'):
-                            field_name = simple_data.get('name', '')
-                            field_value = simple_data.text or ''
+                        for simple_data in schema_data.findall(
+                            "{http://www.opengis.net/kml/2.2}SimpleData"
+                        ):
+                            field_name = simple_data.get("name", "")
+                            field_value = simple_data.text or ""
 
                             # Store all fields in metadata
                             metadata[field_name] = field_value
 
                             # Extract specific fields for routing logic
-                            if field_name == 'CollId':
+                            if field_name == "CollId":
                                 segment_id = field_value
-                            elif field_name == 'Dir':
+                            elif field_name == "Dir":
                                 # Dir field might indicate direction
                                 # Common values: 'N', 'S', 'E', 'W', 'NB', 'SB', 'EB', 'WB'
                                 # For now, preserve in metadata
-                                metadata['direction_code'] = field_value
-                            elif field_name == 'RouteName':
-                                metadata['route_name'] = field_value
-                            elif field_name == 'LengthFt':
+                                metadata["direction_code"] = field_value
+                            elif field_name == "RouteName":
+                                metadata["route_name"] = field_value
+                            elif field_name == "LengthFt":
                                 try:
-                                    metadata['length_ft'] = float(field_value)
+                                    metadata["length_ft"] = float(field_value)
                                 except (ValueError, TypeError):
                                     pass
-                            elif field_name in ['Region', 'Juris', 'CntyCode', 'StRtNo',
-                                              'SegNo', 'BegM', 'EndM', 'IsPilot', 'Collected']:
+                            elif field_name in [
+                                "Region",
+                                "Juris",
+                                "CntyCode",
+                                "StRtNo",
+                                "SegNo",
+                                "BegM",
+                                "EndM",
+                                "IsPilot",
+                                "Collected",
+                            ]:
                                 # Store roadway metadata
                                 metadata[field_name.lower()] = field_value
 
                     # MapPlusSystemData - label information
-                    elif 'MapPlusSystemData' in schema_url:
-                        for simple_data in schema_data.findall('{http://www.opengis.net/kml/2.2}SimpleData'):
-                            field_name = simple_data.get('name', '')
-                            field_value = simple_data.text or ''
-                            metadata[f'label_{field_name.lower()}'] = field_value
+                    elif "MapPlusSystemData" in schema_url:
+                        for simple_data in schema_data.findall(
+                            "{http://www.opengis.net/kml/2.2}SimpleData"
+                        ):
+                            field_name = simple_data.get("name", "")
+                            field_value = simple_data.text or ""
+                            metadata[f"label_{field_name.lower()}"] = field_value
 
                 # Fallback: check for generic extended data (non-schema)
                 if not mapplus_format_detected:
                     for elem in ext.iter():
-                        tag = elem.tag.split('}')[-1].lower() if isinstance(elem.tag, str) else ''
-                        txt = (elem.text or '').strip()
+                        tag = elem.tag.split("}")[-1].lower() if isinstance(elem.tag, str) else ""
+                        txt = (elem.text or "").strip()
 
                         # Check for oneway indicators
-                        if tag in ['oneway', 'one_way', 'one-way', 'is_one_way']:
+                        if tag in ["oneway", "one_way", "one-way", "is_one_way"]:
                             txt_lower = txt.lower()
-                            if txt_lower in ('yes', 'true', '1', 'y'):
+                            if txt_lower in ("yes", "true", "1", "y"):
                                 oneway = True
-                            elif txt_lower in ('no', 'false', '0', 'n'):
+                            elif txt_lower in ("no", "false", "0", "n"):
                                 oneway = False
 
                         # Store all metadata
@@ -306,8 +333,10 @@ class DRPPPipeline:
 
             # Use name as fallback for segment_id
             if segment_id is None:
-                name = pm.find('{http://www.opengis.net/kml/2.2}name')
-                segment_id = name.text.strip() if name is not None and name.text else f"seg_{idx:05d}"
+                name = pm.find("{http://www.opengis.net/kml/2.2}name")
+                segment_id = (
+                    name.text.strip() if name is not None and name.text else f"seg_{idx:05d}"
+                )
 
             # Determine required traversals
             # For roadway surveys, typically:
@@ -330,14 +359,16 @@ class DRPPPipeline:
                 forward_required = True
                 backward_required = True
 
-            segments.append(SegmentRequirement(
-                segment_id=segment_id,
-                forward_required=forward_required,
-                backward_required=backward_required,
-                one_way=(oneway is True),
-                coordinates=coords,
-                metadata=metadata
-            ))
+            segments.append(
+                SegmentRequirement(
+                    segment_id=segment_id,
+                    forward_required=forward_required,
+                    backward_required=backward_required,
+                    one_way=(oneway is True),
+                    coordinates=coords,
+                    metadata=metadata,
+                )
+            )
 
         if not segments:
             raise ValueError("No valid segments found in KML file")
@@ -371,6 +402,7 @@ class DRPPPipeline:
 
                 # Calculate distance between points
                 from Route_Planner import haversine
+
                 dist = haversine(start, end)
 
                 # Add forward edge
@@ -401,26 +433,26 @@ class DRPPPipeline:
             # Add forward edge if required
             if segment.forward_required:
                 edge_idx = len(required_edges)
-                required_edges.append((coords[0], coords[-1], coords, 'forward'))
-                segment_id_map[edge_idx] = (segment.segment_id, 'forward')
+                required_edges.append((coords[0], coords[-1], coords, "forward"))
+                segment_id_map[edge_idx] = (segment.segment_id, "forward")
 
             # Add backward edge if required
             if segment.backward_required:
                 edge_idx = len(required_edges)
                 reversed_coords = list(reversed(coords))
-                required_edges.append((coords[-1], coords[0], reversed_coords, 'backward'))
-                segment_id_map[edge_idx] = (segment.segment_id, 'backward')
+                required_edges.append((coords[-1], coords[0], reversed_coords, "backward"))
+                segment_id_map[edge_idx] = (segment.segment_id, "backward")
 
         self.logger.info(f"  Required edges: {len(required_edges)}")
 
         # Select algorithm
-        if algorithm == 'rfcs' and RFCS_AVAILABLE:
+        if algorithm == "rfcs" and RFCS_AVAILABLE:
             self.logger.info("  Using RFCS algorithm (Route-First, Cluster-Second)")
             from parallel_processing_addon_rfcs import parallel_cluster_routing
-        elif algorithm == 'v4' and V4_AVAILABLE:
+        elif algorithm == "v4" and V4_AVAILABLE:
             self.logger.info("  Using V4 greedy algorithm (Production)")
             from drpp_core import parallel_cluster_routing
-        elif algorithm == 'greedy' and GREEDY_AVAILABLE:
+        elif algorithm == "greedy" and GREEDY_AVAILABLE:
             self.logger.info("  Using legacy greedy algorithm")
             from parallel_processing_addon_greedy import parallel_cluster_routing
         else:
@@ -437,15 +469,16 @@ class DRPPPipeline:
             raise ValueError("No starting point available")
 
         # Route through all segments
-        if V4_AVAILABLE and algorithm == 'v4':
+        if V4_AVAILABLE and algorithm == "v4":
             # Use V4 with on-demand mode for large datasets
             from drpp_core import greedy_route_cluster
+
             result = greedy_route_cluster(
                 graph=self.graph,
                 required_edges=required_edges,
                 segment_indices=list(range(len(required_edges))),
                 start_node=start_node,
-                use_ondemand=True  # Enable on-demand mode
+                use_ondemand=True,  # Enable on-demand mode
             )
             results = [result]
         else:
@@ -456,7 +489,7 @@ class DRPPPipeline:
                 clusters=clusters,
                 cluster_order=cluster_order,
                 start_node=start_node,
-                num_workers=1
+                num_workers=1,
             )
 
         # Convert results to RouteSteps
@@ -466,7 +499,7 @@ class DRPPPipeline:
         # This is simplified - in production, you'd trace through the path
         # and identify which segments were traversed
         for result in results:
-            if hasattr(result, 'path'):
+            if hasattr(result, "path"):
                 path = result.path
             else:
                 path, dist, cid = result  # Legacy format
@@ -477,10 +510,9 @@ class DRPPPipeline:
 
         return route_steps
 
-    def _generate_visualizations(self,
-                                 output_dir: Path,
-                                 formats: List[str],
-                                 config: Optional[Dict]) -> Dict[str, Path]:
+    def _generate_visualizations(
+        self, output_dir: Path, formats: List[str], config: Optional[Dict]
+    ) -> Dict[str, Path]:
         """Generate all requested visualization formats."""
         from drpp_visualization import DRPPVisualizer, VisualizationConfig
 
@@ -491,26 +523,28 @@ class DRPPPipeline:
         output_files = {}
 
         # Generate HTML map
-        if 'html' in formats:
-            html_path = output_dir / 'route_map.html'
+        if "html" in formats:
+            html_path = output_dir / "route_map.html"
             visualizer.generate_html_map(self.segments, self.route_steps, html_path)
-            output_files['html'] = html_path
+            output_files["html"] = html_path
 
         # Generate GeoJSON
-        if 'geojson' in formats:
-            geojson_path = output_dir / 'route_data.geojson'
+        if "geojson" in formats:
+            geojson_path = output_dir / "route_data.geojson"
             visualizer.generate_geojson(self.segments, self.route_steps, geojson_path)
-            output_files['geojson'] = geojson_path
+            output_files["geojson"] = geojson_path
 
         # Generate SVG
-        if 'svg' in formats:
-            svg_path = output_dir / 'route_map.svg'
+        if "svg" in formats:
+            svg_path = output_dir / "route_map.svg"
             visualizer.generate_svg(self.segments, self.route_steps, svg_path)
-            output_files['svg'] = svg_path
+            output_files["svg"] = svg_path
 
         # PNG would require additional rendering (e.g., via CairoSVG or similar)
-        if 'png' in formats:
-            self.logger.warning("PNG generation requires additional dependencies (not yet implemented)")
+        if "png" in formats:
+            self.logger.warning(
+                "PNG generation requires additional dependencies (not yet implemented)"
+            )
 
         return output_files
 
@@ -518,23 +552,29 @@ class DRPPPipeline:
         """Compute route statistics."""
         if not self.route_steps:
             return {
-                'total_distance': 0,
-                'coverage': 0,
-                'deadhead_distance': 0,
-                'deadhead_percent': 0
+                "total_distance": 0,
+                "coverage": 0,
+                "deadhead_distance": 0,
+                "deadhead_percent": 0,
             }
 
         total_distance = sum(step.distance_meters for step in self.route_steps)
-        deadhead_distance = sum(step.distance_meters for step in self.route_steps if step.is_deadhead)
+        deadhead_distance = sum(
+            step.distance_meters for step in self.route_steps if step.is_deadhead
+        )
 
         # Calculate coverage
         required_count = sum(1 for s in self.segments if s.forward_required or s.backward_required)
-        covered_ids = set(step.segment_id for step in self.route_steps if not step.is_deadhead and step.segment_id)
+        covered_ids = set(
+            step.segment_id for step in self.route_steps if not step.is_deadhead and step.segment_id
+        )
         coverage = (len(covered_ids) / required_count * 100) if required_count > 0 else 0
 
         return {
-            'total_distance': total_distance,
-            'coverage': coverage,
-            'deadhead_distance': deadhead_distance,
-            'deadhead_percent': (deadhead_distance / total_distance * 100) if total_distance > 0 else 0
+            "total_distance": total_distance,
+            "coverage": coverage,
+            "deadhead_distance": deadhead_distance,
+            "deadhead_percent": (
+                (deadhead_distance / total_distance * 100) if total_distance > 0 else 0
+            ),
         }
