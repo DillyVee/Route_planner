@@ -1,0 +1,30 @@
+# Production Requirements for DRPP Solver V4.0
+#
+# Install with: pip install -r requirements_production.txt
+
+# Core dependencies (required)
+# Python 3.9+ has these built-in:
+# - typing
+# - dataclasses
+# - concurrent.futures
+# - logging
+# - multiprocessing
+
+# Optional but highly recommended
+numpy>=1.20.0               # For large distance matrices (auto-enabled for >=1000 nodes)
+scikit-learn>=0.24.0        # For DBSCAN and K-means clustering
+psutil>=5.8.0               # For memory tracking in profiling
+
+# Development and testing
+pytest>=6.2.0               # For running unit tests
+pytest-cov>=2.12.0          # For test coverage reports
+
+# Optional profiling
+memory_profiler>=0.60.0     # For detailed memory profiling (optional)
+
+# Optional type checking
+mypy>=0.910                 # For static type checking (development only)
+
+# Documentation (if generating docs)
+# sphinx>=4.0.0
+# sphinx-rtd-theme>=0.5.0
