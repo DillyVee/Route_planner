@@ -202,7 +202,7 @@ def _greedy_route_ondemand(
         raise ValueError(f"Start node {start_node} has no valid ID")
 
     # Initialize
-    path_ids: List[NodeID] = []
+    path_coords: List[Coordinate] = []
     remaining = set(segment_indices)
     total_distance = 0.0
     unreachable: List[UnreachableSegment] = []
@@ -341,12 +341,28 @@ def _greedy_route_ondemand(
                 remaining.remove(best_seg_idx)
                 continue
 
-            # Add approach path
+            # Add approach path (convert node IDs to coordinates)
             if best_path_ids:
-                path_ids.extend(best_path_ids)
+                approach_coords = []
+                for nid in best_path_ids:
+                    coords = normalizer.to_coords(nid)
+                    if coords is not None:
+                        approach_coords.append(coords)
+                # Append approach path, avoiding duplicates with last path point
+                if approach_coords:
+                    if path_coords and approach_coords[0] == path_coords[-1]:
+                        path_coords.extend(approach_coords[1:])
+                    else:
+                        path_coords.extend(approach_coords)
                 total_distance += best_dist
 
-            # Traverse segment
+            # Traverse segment - add segment coordinates to path
+            # Avoid duplicate with last approach point
+            if segment_coords:
+                if path_coords and segment_coords[0] == path_coords[-1]:
+                    path_coords.extend(segment_coords[1:])
+                else:
+                    path_coords.extend(segment_coords)
             segment_length = _calculate_segment_length(segment_coords)
             total_distance += segment_length
 
@@ -364,13 +380,6 @@ def _greedy_route_ondemand(
                     f"Iteration {iteration}: covered {covered}/{total} "
                     f"segments [{rate:.1f} segments/sec]"
                 )
-
-    # Convert path to coordinates
-    path_coords = []
-    for nid in path_ids:
-        coords = normalizer.to_coords(nid)
-        if coords:
-            path_coords.append(coords)
 
     elapsed = time.perf_counter() - start_time
     segments_covered = len(segment_indices) - len(unreachable)
@@ -549,7 +558,7 @@ def greedy_route_cluster(
         normalizer = NodeNormalizer(graph.node_to_id, graph.id_to_node)
 
     # Initialize
-    path_ids: List[NodeID] = []
+    path_coords: List[Coordinate] = []
     remaining = set(segment_indices)
     current_id = normalizer.to_id(start_node)
     total_distance = 0.0
@@ -650,12 +659,28 @@ def greedy_route_cluster(
                     remaining.remove(best_seg_idx)
                     continue
 
-                # Add approach path
+                # Add approach path (convert node IDs to coordinates)
                 if best_approach_path_ids:
-                    path_ids.extend(best_approach_path_ids)
+                    approach_coords = []
+                    for nid in best_approach_path_ids:
+                        coords = normalizer.to_coords(nid)
+                        if coords is not None:
+                            approach_coords.append(coords)
+                    # Append approach path, avoiding duplicates with last path point
+                    if approach_coords:
+                        if path_coords and approach_coords[0] == path_coords[-1]:
+                            path_coords.extend(approach_coords[1:])
+                        else:
+                            path_coords.extend(approach_coords)
                     total_distance += best_approach_dist
 
-                # Traverse segment
+                # Traverse segment - add segment coordinates to path
+                # Avoid duplicate with last approach point
+                if segment_coords:
+                    if path_coords and segment_coords[0] == path_coords[-1]:
+                        path_coords.extend(segment_coords[1:])
+                    else:
+                        path_coords.extend(segment_coords)
                 segment_length = _calculate_segment_length(segment_coords)
                 total_distance += segment_length
 
@@ -668,13 +693,6 @@ def greedy_route_cluster(
                         f"Iteration {iteration}: covered {len(segment_indices) - len(remaining)} "
                         f"segments, {len(remaining)} remaining"
                     )
-
-    # Convert path to coordinates using normalizer method
-    path_coords = []
-    for nid in path_ids:
-        coords = normalizer.to_coords(nid)
-        if coords is not None:
-            path_coords.append(coords)
 
     elapsed = time.perf_counter() - start_time
     segments_covered = len(segment_indices) - len(unreachable)
