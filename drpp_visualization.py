@@ -117,16 +117,46 @@ class DRPPVisualizer:
             # Determine color based on requirement type
             if segment.is_two_way_required:
                 color = self.config.colors['both_required']
-                tooltip = f"Segment {segment.segment_id}: BOTH DIRECTIONS REQUIRED"
+                direction_text = "BOTH DIRECTIONS REQUIRED ↔"
             elif segment.forward_required:
                 color = self.config.colors['forward_required']
-                tooltip = f"Segment {segment.segment_id}: FORWARD REQUIRED →"
+                direction_text = "FORWARD REQUIRED →"
             elif segment.backward_required:
                 color = self.config.colors['backward_required']
-                tooltip = f"Segment {segment.segment_id}: BACKWARD REQUIRED ←"
+                direction_text = "BACKWARD REQUIRED ←"
             else:
                 color = self.config.colors['not_required']
-                tooltip = f"Segment {segment.segment_id}: Not required"
+                direction_text = "Not required"
+
+            # Build rich tooltip with metadata
+            tooltip_lines = [f"<b>Segment {segment.segment_id}</b>", direction_text]
+
+            # Add MapPlus/roadway metadata if available
+            if segment.metadata:
+                metadata_fields = [
+                    ('route_name', 'Route'),
+                    ('direction_code', 'Dir'),
+                    ('length_ft', 'Length'),
+                    ('region', 'Region'),
+                    ('cntycode', 'County'),
+                    ('strtno', 'State Route'),
+                    ('segno', 'Segment #'),
+                    ('collected', 'Collected'),
+                ]
+
+                for field_key, field_label in metadata_fields:
+                    if field_key in segment.metadata:
+                        value = segment.metadata[field_key]
+                        if field_key == 'length_ft':
+                            try:
+                                ft = float(value)
+                                tooltip_lines.append(f"{field_label}: {ft:.0f} ft ({ft * 0.3048:.0f} m)")
+                            except (ValueError, TypeError):
+                                tooltip_lines.append(f"{field_label}: {value}")
+                        else:
+                            tooltip_lines.append(f"{field_label}: {value}")
+
+            tooltip = "<br>".join(tooltip_lines)
 
             # Add segment line
             folium.PolyLine(
@@ -250,9 +280,19 @@ class DRPPVisualizer:
                 'feature_type': 'segment'
             }
 
-            # Add metadata if available
+            # Add all MapPlus/roadway metadata if available
             if segment.metadata:
+                # Preserve all original fields
                 properties.update(segment.metadata)
+
+                # Add computed fields for convenience
+                if 'length_ft' in segment.metadata:
+                    try:
+                        length_ft = float(segment.metadata['length_ft'])
+                        properties['length_m'] = length_ft * 0.3048
+                        properties['length_km'] = (length_ft * 0.3048) / 1000
+                    except (ValueError, TypeError):
+                        pass
 
             feature = {
                 'type': 'Feature',
