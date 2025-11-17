@@ -5,7 +5,7 @@ This module provides type aliases and dataclasses for type safety and clarity.
 All coordinate operations should use these types for consistency.
 """
 
-from typing import Tuple, List, Dict, Optional, NamedTuple, TypeAlias
+from typing import Tuple, List, Dict, Optional, NamedTuple, TypeAlias, Union
 from dataclasses import dataclass
 from enum import Enum
 
@@ -63,8 +63,8 @@ class SegmentMetadata:
         highway_type: Optional OSM highway type
     """
     index: SegmentIndex
-    start_node: Coordinate | NodeID
-    end_node: Coordinate | NodeID
+    start_node: Union[Coordinate, NodeID]
+    end_node: Union[Coordinate, NodeID]
     coordinates: List[Coordinate]
     length: Distance
     speed_limit: Optional[float] = None

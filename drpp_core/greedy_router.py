@@ -5,7 +5,7 @@ Implements nearest-neighbor greedy approach with fallback strategies
 for unreachable segments.
 """
 
-from typing import List, Tuple, Set, Optional, Any, Dict
+from typing import List, Tuple, Set, Optional, Any, Dict, Union
 from dataclasses import dataclass
 
 from .types import (
@@ -33,7 +33,7 @@ class NodeNormalizer:
     node_to_id: Dict[Coordinate, NodeID]
     id_to_node: Dict[NodeID, Coordinate]
 
-    def to_id(self, node: Coordinate | NodeID) -> Optional[NodeID]:
+    def to_id(self, node: Union[Coordinate, NodeID]) -> Optional[NodeID]:
         """Convert node (coordinate or ID) to ID.
 
         Args:
@@ -50,7 +50,7 @@ class NodeNormalizer:
             return node
         return self.node_to_id.get(node)
 
-    def to_coords(self, node: Coordinate | NodeID) -> Optional[Coordinate]:
+    def to_coords(self, node: Union[Coordinate, NodeID]) -> Optional[Coordinate]:
         """Convert node (ID or coordinate) to coordinate.
 
         Args:
@@ -158,7 +158,7 @@ def _greedy_route_ondemand(
     graph: Any,
     required_edges: List[Tuple],
     segment_indices: List[SegmentIndex],
-    start_node: Coordinate | NodeID
+    start_node: Union[Coordinate, NodeID]
 ) -> PathResult:
     """Route using on-demand Dijkstra (no precomputation).
 
@@ -332,7 +332,7 @@ def greedy_route_cluster(
     graph: Optional[Any],
     required_edges: List[Tuple],
     segment_indices: List[SegmentIndex],
-    start_node: Coordinate | NodeID,
+    start_node: Union[Coordinate, NodeID],
     distance_matrix: Optional[DistanceMatrix] = None,
     normalizer: Optional[NodeNormalizer] = None,
     enable_fallback: bool = True,

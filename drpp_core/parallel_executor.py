@@ -5,7 +5,7 @@ Uses ProcessPoolExecutor for better resource management compared to Pool.
 Precomputes distance matrices in parent process to avoid pickling full graph.
 """
 
-from typing import List, Dict, Tuple, Optional, Callable, Any
+from typing import List, Dict, Tuple, Optional, Callable, Any, Union
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 import multiprocessing
@@ -161,7 +161,7 @@ def _precompute_cluster_tasks(
     required_edges: List[Tuple],
     clusters: Dict[ClusterID, List[SegmentIndex]],
     cluster_order: List[ClusterID],
-    start_node: Coordinate | NodeID
+    start_node: Union[Coordinate, NodeID]
 ) -> List[ClusterTask]:
     """Precompute distance matrices for all clusters in parent process.
 
@@ -266,7 +266,7 @@ def parallel_cluster_routing(
     required_edges: List[Tuple],
     clusters: Dict[ClusterID, List[SegmentIndex]],
     cluster_order: List[ClusterID],
-    start_node: Coordinate | NodeID,
+    start_node: Union[Coordinate, NodeID],
     num_workers: Optional[int] = None,
     progress_callback: Optional[Callable[[int, int], None]] = None
 ) -> List[PathResult]:
