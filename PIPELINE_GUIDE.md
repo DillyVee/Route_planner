@@ -221,7 +221,55 @@ Your KML file should contain LineString placemarks with:
   - `maxspeed` - Speed limit
   - Other metadata preserved
 
-### Example KML:
+### MapPlus/Duweis Format (Fully Supported) ✅
+
+The pipeline fully supports MapPlus roadway survey KML files with:
+
+**Automatically Extracted Fields**:
+- `CollId` → Segment ID
+- `RouteName` → Route name
+- `Dir` → Direction code (N/S/E/W/NB/SB/etc.)
+- `LengthFt` → Segment length in feet (auto-converted to meters)
+- `Region` → Region ID
+- `Juris` → Jurisdiction
+- `CntyCode` → County code
+- `StRtNo` → State route number
+- `SegNo` → Segment number
+- `BegM` / `EndM` → Begin/end mile markers
+- `IsPilot` → Pilot designation
+- `Collected` → Collection status
+
+**All fields are**:
+- ✅ Preserved in metadata
+- ✅ Displayed in interactive map tooltips
+- ✅ Exported to GeoJSON with computed metrics
+- ✅ Available for filtering and analysis
+
+**Example MapPlus KML Structure**:
+```xml
+<Placemark>
+  <name>11195</name>
+  <LineString>
+    <coordinates>...</coordinates>
+  </LineString>
+  <ExtendedData>
+    <SchemaData schemaUrl="#MapPlusCustomFeatureClass:D500876L518440">
+      <SimpleData name="CollId">11195</SimpleData>
+      <SimpleData name="RouteName">PA-981</SimpleData>
+      <SimpleData name="Dir">NB</SimpleData>
+      <SimpleData name="LengthFt">1234.5</SimpleData>
+      <SimpleData name="Region">2</SimpleData>
+      <SimpleData name="CntyCode">42</SimpleData>
+      <!-- ... more fields ... -->
+    </SchemaData>
+  </ExtendedData>
+</Placemark>
+```
+
+### Generic KML Format
+
+Standard KML format is also supported:
+
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
