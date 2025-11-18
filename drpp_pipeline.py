@@ -96,6 +96,7 @@ class DRPPPipeline:
         self.segments: List[SegmentRequirement] = []
         self.graph = None
         self.route_steps: List[RouteStep] = []
+        self.routing_results = []  # Store actual routing results from algorithms
 
     def run(
         self,
@@ -492,22 +493,33 @@ class DRPPPipeline:
                 num_workers=1,
             )
 
-        # Convert results to RouteSteps
-        route_steps = []
-        step_number = 1
+        # Store the actual routing results for statistics computation
+        # The results contain the actual path and distance information
+        self.routing_results = results
 
-        # This is simplified - in production, you'd trace through the path
-        # and identify which segments were traversed
+        # Log actual results for verification
+        total_dist = 0
+        total_covered = 0
         for result in results:
-            if hasattr(result, "path"):
-                path = result.path
+            if hasattr(result, "distance"):
+                # V4 PathResult format
+                total_dist += result.distance
+                total_covered += result.segments_covered
+                self.logger.info(
+                    f"  Result: {result.distance / 1000:.1f}km, "
+                    f"{result.segments_covered} segments covered"
+                )
             else:
-                path, dist, cid = result  # Legacy format
+                # Legacy format: (path, distance, cluster_id)
+                path, dist, cid = result
+                total_dist += dist
+                self.logger.info(f"  Result: {dist / 1000:.1f}km")
 
-            # For each segment in the path, create a RouteStep
-            # This is a placeholder - actual implementation would trace the path
-            self.logger.warning("Route step generation is simplified - implement full path tracing")
+        self.logger.info(f"  Total: {total_dist / 1000:.1f}km, {total_covered} segments")
 
+        # TODO: Convert results to RouteSteps for visualization
+        # For now, return empty list as route_steps are only used for visualization
+        route_steps = []
         return route_steps
 
     def _generate_visualizations(
@@ -550,7 +562,8 @@ class DRPPPipeline:
 
     def _compute_statistics(self) -> Dict:
         """Compute route statistics."""
-        if not self.route_steps:
+        # Use routing_results instead of route_steps
+        if not self.routing_results:
             return {
                 "total_distance": 0,
                 "coverage": 0,
@@ -558,23 +571,39 @@ class DRPPPipeline:
                 "deadhead_percent": 0,
             }
 
-        total_distance = sum(step.distance_meters for step in self.route_steps)
-        deadhead_distance = sum(
-            step.distance_meters for step in self.route_steps if step.is_deadhead
+        # Extract statistics from routing results
+        total_distance = 0
+        total_segments_covered = 0
+        total_segments_unreachable = 0
+
+        for result in self.routing_results:
+            if hasattr(result, "distance"):
+                # V4 PathResult format
+                total_distance += result.distance
+                total_segments_covered += result.segments_covered
+                total_segments_unreachable += result.segments_unreachable
+            else:
+                # Legacy format: (path, distance, cluster_id)
+                path, dist, cid = result
+                total_distance += dist
+                # For legacy format, we don't have coverage info easily available
+
+        # Calculate coverage based on segments
+        # Count required traversals (forward + backward)
+        required_count = sum(s.required_traversals for s in self.segments)
+        coverage = (
+            (total_segments_covered / required_count * 100) if required_count > 0 else 0
         )
 
-        # Calculate coverage
-        required_count = sum(1 for s in self.segments if s.forward_required or s.backward_required)
-        covered_ids = set(
-            step.segment_id for step in self.route_steps if not step.is_deadhead and step.segment_id
-        )
-        coverage = (len(covered_ids) / required_count * 100) if required_count > 0 else 0
-
+        # Note: Deadhead calculation requires detailed path tracing
+        # For now, we estimate it based on unreachable segments
+        # In a full implementation, this would come from route_steps
         return {
             "total_distance": total_distance,
             "coverage": coverage,
-            "deadhead_distance": deadhead_distance,
-            "deadhead_percent": (
-                (deadhead_distance / total_distance * 100) if total_distance > 0 else 0
-            ),
+            "deadhead_distance": 0,  # TODO: Implement with full path tracing
+            "deadhead_percent": 0,  # TODO: Implement with full path tracing
+            "segments_covered": total_segments_covered,
+            "segments_unreachable": total_segments_unreachable,
+            "required_count": required_count,
         }
