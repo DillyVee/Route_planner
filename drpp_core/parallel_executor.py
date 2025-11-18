@@ -459,6 +459,7 @@ def sequential_cluster_routing_ondemand(
     clusters: Dict[ClusterID, List[SegmentIndex]],
     cluster_order: List[ClusterID],
     start_node: Union[Coordinate, NodeID],
+    num_workers: Optional[int] = None,
     progress_callback: Optional[Callable[[int, int], None]] = None,
     lookahead_depth: int = 1,
     max_search_distance: Optional[float] = None,
@@ -478,6 +479,7 @@ def sequential_cluster_routing_ondemand(
         clusters: Mapping from cluster ID to segment indices
         cluster_order: Order in which to process clusters
         start_node: Global starting position
+        num_workers: Number of worker processes (ignored - kept for backward compatibility)
         progress_callback: Optional function(completed, total) for progress
         lookahead_depth: Number of steps to look ahead (1-3). Higher considers future connectivity
         max_search_distance: Maximum distance to search (meters). Limits Dijkstra exploration
@@ -499,7 +501,12 @@ def sequential_cluster_routing_ondemand(
         This function uses sequential routing with on-demand mode.
         For 100+ clusters, this is faster than parallel routing with
         matrix precomputation due to avoiding the O(n²) matrix computation.
+        The num_workers parameter is ignored as this is sequential processing.
     """
+    # num_workers is ignored - this is sequential processing
+    if num_workers is not None:
+        logger.debug(f"num_workers={num_workers} ignored (sequential processing)")
+
     logger.info(
         f"Starting ON-DEMAND sequential routing: {len(cluster_order)} clusters, "
         f"bypassing matrix precomputation for maximum speed"
