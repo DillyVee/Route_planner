@@ -16,10 +16,11 @@ Features:
   * Multiple output formats (HTML, GeoJSON, SVG)
 
 Algorithms:
+- 'industry': Industry-standard DRPP (Eulerian augmentation + Hierholzer) [RECOMMENDED]
 - 'v4': Production V4 greedy (FAST, on-demand Dijkstra for large datasets)
 - 'rfcs': Route-First Cluster-Second (HIGH QUALITY)
 - 'greedy': Legacy greedy
-- 'hungarian': Hungarian assignment (DEFAULT)
+- 'hungarian': Hungarian assignment
 """
 
 import sys
@@ -34,17 +35,18 @@ def main():
         print("Usage: python run_drpp_pipeline.py <kml_file> [algorithm]")
         print()
         print("Algorithms:")
-        print("  v4       - Production V4 greedy (FAST, recommended for large datasets)")
-        print("  rfcs     - Route-First Cluster-Second (HIGH QUALITY)")
-        print("  greedy   - Legacy greedy")
-        print("  hungarian - Hungarian assignment (default)")
+        print("  industry  - Industry-standard DRPP (Eulerian + Hierholzer) [RECOMMENDED]")
+        print("  v4        - Production V4 greedy (FAST, for large datasets)")
+        print("  rfcs      - Route-First Cluster-Second (HIGH QUALITY)")
+        print("  greedy    - Legacy greedy")
+        print("  hungarian - Hungarian assignment")
         print()
         print("Example:")
-        print("  python run_drpp_pipeline.py my_segments.kml v4")
+        print("  python run_drpp_pipeline.py my_segments.kml industry")
         sys.exit(1)
 
     kml_file = Path(sys.argv[1])
-    algorithm = sys.argv[2] if len(sys.argv) > 2 else "v4"
+    algorithm = sys.argv[2] if len(sys.argv) > 2 else "industry"
 
     if not kml_file.exists():
         print(f"Error: KML file not found: {kml_file}")

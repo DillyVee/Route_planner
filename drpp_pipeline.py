@@ -16,7 +16,7 @@ Usage:
     pipeline = DRPPPipeline()
     results = pipeline.run(
         kml_file='your_segments.kml',
-        algorithm='rfcs',  # or 'greedy', 'v4', 'hungarian'
+        algorithm='industry',  # or 'v4', 'rfcs', 'greedy', 'hungarian'
         output_formats=['html', 'geojson', 'png']
     )
 """
@@ -417,9 +417,101 @@ class DRPPPipeline:
         self.logger.info(f"  Built graph with {len(graph.id_to_node)} nodes")
         return graph
 
+    def _solve_drpp_industry(self) -> List[RouteStep]:
+        """
+        Solve DRPP using industry-standard pipeline.
+
+        This uses:
+        - NetworkX directed multigraph
+        - Eulerian augmentation (graph balancing)
+        - Hierholzer's algorithm for Eulerian tour
+        - Full metadata preservation
+
+        Returns:
+            List of RouteStep objects for visualization
+        """
+        from industry_drpp_solver import DirectedEdge, IndustryDRPPSolver, compute_edge_cost
+
+        self.logger.info("  Using INDUSTRY-STANDARD DRPP solver")
+        self.logger.info("  Algorithm: Eulerian augmentation + Hierholzer")
+
+        # Create solver
+        solver = IndustryDRPPSolver()
+
+        # Convert segments to DirectedEdge objects
+        for segment in self.segments:
+            coords = segment.coordinates
+            if not coords or len(coords) < 2:
+                continue
+
+            # Compute edge cost from geometry
+            cost = compute_edge_cost(coords)
+
+            # Add forward edge if required
+            if segment.forward_required:
+                edge = DirectedEdge(
+                    edge_id=f"{segment.segment_id}_fwd",
+                    from_node=coords[0],
+                    to_node=coords[-1],
+                    geometry=coords,
+                    cost=cost,
+                    required=True,
+                    metadata={
+                        **segment.metadata,
+                        'segment_id': segment.segment_id,
+                        'direction': 'forward'
+                    }
+                )
+                solver.add_required_edge(edge)
+
+            # Add backward edge if required
+            if segment.backward_required:
+                reversed_coords = list(reversed(coords))
+                edge = DirectedEdge(
+                    edge_id=f"{segment.segment_id}_bwd",
+                    from_node=coords[-1],
+                    to_node=coords[0],
+                    geometry=reversed_coords,
+                    cost=cost,
+                    required=True,
+                    metadata={
+                        **segment.metadata,
+                        'segment_id': segment.segment_id,
+                        'direction': 'backward'
+                    }
+                )
+                solver.add_required_edge(edge)
+
+        # Solve DRPP
+        solution = solver.solve()
+
+        # Store routing results for statistics
+        self.routing_results = [solution]
+
+        # Convert solution to RouteSteps for visualization
+        route_steps = []
+        for step_num, edge in enumerate(solution.edge_sequence, start=1):
+            route_step = RouteStep(
+                step_number=step_num,
+                segment_id=edge.metadata.get('segment_id'),
+                direction=edge.metadata.get('direction', 'forward'),
+                is_deadhead=not edge.required,
+                coordinates=edge.geometry,
+                distance_meters=edge.cost
+            )
+            route_steps.append(route_step)
+
+        self.logger.info(f"  Generated {len(route_steps)} route steps")
+
+        return route_steps
+
     def _solve_drpp(self, algorithm: str) -> List[RouteStep]:
         """Solve DRPP with specified algorithm."""
-        # Import routing functions
+        # Check if industry-standard solver is requested
+        if algorithm == "industry":
+            return self._solve_drpp_industry()
+
+        # Import routing functions for legacy algorithms
         from Route_Planner import GREEDY_AVAILABLE, RFCS_AVAILABLE, V4_AVAILABLE
 
         # Build required edges list from segments
@@ -575,9 +667,26 @@ class DRPPPipeline:
         total_distance = 0
         total_segments_covered = 0
         total_segments_unreachable = 0
+        deadhead_distance = 0
 
         for result in self.routing_results:
-            if hasattr(result, "distance"):
+            # Check if industry-standard DRPP solution
+            if hasattr(result, "total_cost"):
+                # Industry DRPPSolution format
+                total_distance = result.total_cost
+                coverage = result.coverage
+                deadhead_distance = result.deadhead_cost
+
+                return {
+                    "total_distance": total_distance,
+                    "coverage": coverage,
+                    "deadhead_distance": deadhead_distance,
+                    "deadhead_percent": (deadhead_distance / total_distance * 100) if total_distance > 0 else 0,
+                    "required_cost": result.required_cost,
+                    "solver_metadata": result.metadata,
+                }
+
+            elif hasattr(result, "distance"):
                 # V4 PathResult format
                 total_distance += result.distance
                 total_segments_covered += result.segments_covered
