@@ -215,11 +215,32 @@ def _greedy_route_ondemand(
             iteration += 1
 
             # Compute single-source Dijkstra from current position
-            # Use max_search_distance to limit exploration if specified
+            # Try with max_distance parameter first (new API), fall back to old API
             try:
+                # Try new API with max_distance support
                 distances, predecessors = graph.dijkstra(
                     current_id, max_distance=max_search_distance
                 )
+            except TypeError as te:
+                # Old DirectedGraph doesn't support max_distance parameter
+                # Fall back to calling without it
+                if "max_distance" in str(te):
+                    try:
+                        distances, predecessors = graph.dijkstra(current_id)
+                    except Exception as e:
+                        logger.error(f"Dijkstra failed at iteration {iteration}: {e}", exc_info=True)
+                        # Mark all remaining as unreachable
+                        for seg_idx in remaining:
+                            unreachable.append(
+                                UnreachableSegment(
+                                    segment_index=seg_idx,
+                                    reason=UnreachableReason.NO_PATH_FROM_CURRENT.value,
+                                    attempted_from=current_id,
+                                )
+                            )
+                        break
+                else:
+                    raise
             except Exception as e:
                 logger.error(f"Dijkstra failed at iteration {iteration}: {e}", exc_info=True)
                 # Mark all remaining as unreachable
