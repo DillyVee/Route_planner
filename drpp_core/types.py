@@ -52,6 +52,44 @@ class ClusterResult(NamedTuple):
 
 
 @dataclass
+class SegmentRequirement:
+    """Defines traversal requirements for a segment.
+
+    Attributes:
+        segment_id: Unique segment identifier from KML
+        forward_required: Must traverse start->end
+        backward_required: Must traverse end->start
+        one_way: Only one direction is allowed
+        coordinates: List of (lat, lon) points
+        metadata: Additional KML data (speed, name, etc.)
+    """
+
+    segment_id: str
+    forward_required: bool
+    backward_required: bool
+    one_way: bool = False
+    coordinates: Optional[List[Tuple[float, float]]] = None
+    metadata: Optional[Dict] = None
+
+    def __post_init__(self):
+        """Initialize default mutable fields."""
+        if self.coordinates is None:
+            self.coordinates = []
+        if self.metadata is None:
+            self.metadata = {}
+
+    @property
+    def is_two_way_required(self) -> bool:
+        """Both directions must be traversed."""
+        return self.forward_required and self.backward_required
+
+    @property
+    def required_traversals(self) -> int:
+        """Number of required traversals (0, 1, or 2)."""
+        return int(self.forward_required) + int(self.backward_required)
+
+
+@dataclass
 class SegmentMetadata:
     """Metadata for a required segment.
 
