@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>Test Road Segments</name>
+    <description>Simple test segments for DRPP</description>
+
+    <Placemark>
+      <name>Segment 1</name>
+      <ExtendedData>
+        <Data name="CollId"><value>SEG001</value></Data>
+        <Data name="RouteName"><value>Main Street</value></Data>
+        <Data name="Dir"><value>NB</value></Data>
+        <Data name="LengthFt"><value>500</value></Data>
+      </ExtendedData>
+      <LineString>
+        <coordinates>
+          -74.0,40.0,0
+          -74.0,40.01,0
+        </coordinates>
+      </LineString>
+    </Placemark>
+
+    <Placemark>
+      <name>Segment 2</name>
+      <ExtendedData>
+        <Data name="CollId"><value>SEG002</value></Data>
+        <Data name="RouteName"><value>Main Street</value></Data>
+        <Data name="Dir"><value>NB</value></Data>
+        <Data name="LengthFt"><value>500</value></Data>
+      </ExtendedData>
+      <LineString>
+        <coordinates>
+          -74.0,40.01,0
+          -74.0,40.02,0
+        </coordinates>
+      </LineString>
+    </Placemark>
+
+    <Placemark>
+      <name>Segment 3</name>
+      <ExtendedData>
+        <Data name="CollId"><value>SEG003</value></Data>
+        <Data name="RouteName"><value>Cross Street</value></Data>
+        <Data name="Dir"><value>EB</value></Data>
+        <Data name="LengthFt"><value>500</value></Data>
+      </ExtendedData>
+      <LineString>
+        <coordinates>
+          -74.0,40.02,0
+          -73.99,40.02,0
+        </coordinates>
+      </LineString>
+    </Placemark>
+
+  </Document>
+</kml>

@@ -417,8 +417,61 @@ class DRPPPipeline:
                 if segment.backward_required or not segment.one_way:
                     graph.add_edge(end, start, dist)
 
+        # CRITICAL FIX: Add deadhead edges between all segment endpoints
+        # This ensures disconnected segments can be reached
+        self._add_deadhead_edges_to_graph(graph, haversine)
+
         self.logger.info(f"  Built graph with {len(graph.id_to_node)} nodes")
         return graph
+
+    def _add_deadhead_edges_to_graph(self, graph, haversine_func):
+        """Add connecting edges between all segment endpoints for reachability.
+
+        This is essential for DRPP: segments may not be directly connected,
+        so we need to add shortest-path edges between them.
+
+        Args:
+            graph: DirectedGraph to add edges to
+            haversine_func: Function to calculate distance
+        """
+        # Get all unique segment endpoints
+        endpoints = set()
+        for segment in self.segments:
+            if segment.coordinates and len(segment.coordinates) >= 2:
+                endpoints.add(segment.coordinates[0])  # Start
+                endpoints.add(segment.coordinates[-1])  # End
+
+        endpoints_list = list(endpoints)
+        num_endpoints = len(endpoints_list)
+
+        if num_endpoints <= 1:
+            return  # Nothing to connect
+
+        self.logger.info(f"  Adding deadhead edges between {num_endpoints} segment endpoints...")
+
+        # For each pair of endpoints, add direct edge (straight-line distance)
+        # This ensures all segments are reachable
+        # Limit to reasonable number to avoid explosion
+        max_connections = min(20, num_endpoints - 1)
+
+        deadhead_count = 0
+        for i, point1 in enumerate(endpoints_list):
+            # Find nearest neighbors for this endpoint
+            neighbors = []
+            for j, point2 in enumerate(endpoints_list):
+                if i == j:
+                    continue
+                dist = haversine_func(point1, point2)
+                neighbors.append((dist, point2))
+
+            # Sort by distance and connect to nearest N
+            neighbors.sort()
+            for dist, point2 in neighbors[:max_connections]:
+                # Add edge (DirectedGraph.add_edge avoids duplicates)
+                graph.add_edge(point1, point2, dist)
+                deadhead_count += 1
+
+        self.logger.info(f"  Added {deadhead_count} deadhead edges for full connectivity")
 
     def _solve_drpp(self, algorithm: str) -> List[RouteStep]:
         """Solve DRPP with specified algorithm."""
@@ -540,9 +593,58 @@ class DRPPPipeline:
 
         self.logger.info(f"  Total: {total_dist / 1000:.1f}km, {total_covered} segments")
 
-        # TODO: Convert results to RouteSteps for visualization
-        # For now, return empty list as route_steps are only used for visualization
+        # Convert routing_results to RouteSteps for visualization
+        route_steps = self._convert_results_to_steps(results)
+        return route_steps
+
+    def _convert_results_to_steps(self, results: List) -> List[RouteStep]:
+        """Convert routing results to RouteStep objects for visualization.
+
+        Args:
+            results: List of PathResult objects or legacy tuples
+
+        Returns:
+            List of RouteStep objects with full path information
+        """
         route_steps = []
+        step_number = 1
+
+        for result in results:
+            if hasattr(result, "path"):
+                # V4 PathResult format - has full path coordinates
+                path_coords = result.path
+                total_distance = result.distance
+
+                # For now, create a single step per result
+                # In a more detailed implementation, this could break down the path
+                # into individual segment traversals
+                if path_coords and len(path_coords) > 0:
+                    step = RouteStep(
+                        step_number=step_number,
+                        segment_id=f"cluster_{result.cluster_id}",
+                        direction="forward",
+                        is_deadhead=False,
+                        coordinates=path_coords,
+                        distance_meters=total_distance
+                    )
+                    route_steps.append(step)
+                    step_number += 1
+
+            else:
+                # Legacy format: (path, distance, cluster_id)
+                path, dist, cid = result
+                if path and len(path) > 0:
+                    step = RouteStep(
+                        step_number=step_number,
+                        segment_id=f"cluster_{cid}",
+                        direction="forward",
+                        is_deadhead=False,
+                        coordinates=path,
+                        distance_meters=dist
+                    )
+                    route_steps.append(step)
+                    step_number += 1
+
         return route_steps
 
     def _generate_visualizations(
