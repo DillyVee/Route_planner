@@ -386,7 +386,12 @@ class DRPPPipeline:
 
     def _build_graph(self):
         """Build directed graph from segments."""
-        from Route_Planner import DirectedGraph
+        # Import from standalone module to avoid PyQt6 dependency
+        try:
+            from graph_core import DirectedGraph, haversine
+        except ImportError:
+            # Fallback to Route_Planner (requires PyQt6)
+            from Route_Planner import DirectedGraph, haversine
 
         graph = DirectedGraph()
 
@@ -402,8 +407,6 @@ class DRPPPipeline:
                 end = coords[i + 1]
 
                 # Calculate distance between points
-                from Route_Planner import haversine
-
                 dist = haversine(start, end)
 
                 # Add forward edge
@@ -419,8 +422,28 @@ class DRPPPipeline:
 
     def _solve_drpp(self, algorithm: str) -> List[RouteStep]:
         """Solve DRPP with specified algorithm."""
-        # Import routing functions
-        from Route_Planner import GREEDY_AVAILABLE, RFCS_AVAILABLE, V4_AVAILABLE
+        # Check algorithm availability
+        V4_AVAILABLE = False
+        GREEDY_AVAILABLE = False
+        RFCS_AVAILABLE = False
+
+        try:
+            from drpp_core import parallel_cluster_routing
+            V4_AVAILABLE = True
+        except ImportError:
+            pass
+
+        try:
+            from legacy.parallel_processing_addon_greedy import parallel_cluster_routing as parallel_cluster_routing_greedy
+            GREEDY_AVAILABLE = True
+        except ImportError:
+            pass
+
+        try:
+            from legacy.parallel_processing_addon_rfcs import parallel_cluster_routing as parallel_cluster_routing_rfcs
+            RFCS_AVAILABLE = True
+        except ImportError:
+            pass
 
         # Build required edges list from segments
         required_edges = []
