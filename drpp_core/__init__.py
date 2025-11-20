@@ -41,7 +41,15 @@ from .parallel_executor import (
     sequential_cluster_routing_ondemand,
 )
 from .path_reconstruction import reconstruct_path
-from .types import ClusterResult, Coordinate, NodeID, PathResult, SegmentIndex
+from .types import ClusterResult, Coordinate, NodeID, PathResult, SegmentIndex, SegmentRequirement
+
+# Industry-Standard DRPP Solver (NEW)
+from .topology import TopologyBuilder, TopologyNode, TopologyEdge, build_adjacency_list, get_node_degrees
+from .connectivity import ConnectivityAnalyzer, ConnectedComponent, check_graph_connectivity
+from .eulerian_solver import EulerianSolver, EulerianTour, NodeBalance, solve_drpp_eulerian
+from .industry_drpp_solver import IndustryDRPPSolver, DRPPSolution, solve_drpp_industry_standard
+from .kml_export import KMLExporter, export_drpp_to_kml
+from .turn_by_turn import TurnByTurnGenerator, TurnInstruction, generate_turn_by_turn
 
 # Backward compatibility alias
 parallel_cluster_routing_ondemand = sequential_cluster_routing_ondemand
@@ -53,6 +61,7 @@ __all__ = [
     "SegmentIndex",
     "PathResult",
     "ClusterResult",
+    "SegmentRequirement",
     # Distance Matrix
     "DistanceMatrix",
     "compute_distance_matrix",
@@ -72,6 +81,27 @@ __all__ = [
     "haversine",
     "snap_coordinate",
     "calculate_bearing",
+    # Industry-Standard DRPP Solver
+    "TopologyBuilder",
+    "TopologyNode",
+    "TopologyEdge",
+    "build_adjacency_list",
+    "get_node_degrees",
+    "ConnectivityAnalyzer",
+    "ConnectedComponent",
+    "check_graph_connectivity",
+    "EulerianSolver",
+    "EulerianTour",
+    "NodeBalance",
+    "solve_drpp_eulerian",
+    "IndustryDRPPSolver",
+    "DRPPSolution",
+    "solve_drpp_industry_standard",
+    "KMLExporter",
+    "export_drpp_to_kml",
+    "TurnByTurnGenerator",
+    "TurnInstruction",
+    "generate_turn_by_turn",
     # Exceptions
     "DRPPError",
     "ParseError",
