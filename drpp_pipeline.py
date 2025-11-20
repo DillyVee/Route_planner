@@ -540,9 +540,58 @@ class DRPPPipeline:
 
         self.logger.info(f"  Total: {total_dist / 1000:.1f}km, {total_covered} segments")
 
-        # TODO: Convert results to RouteSteps for visualization
-        # For now, return empty list as route_steps are only used for visualization
+        # Convert routing_results to RouteSteps for visualization
+        route_steps = self._convert_results_to_steps(results)
+        return route_steps
+
+    def _convert_results_to_steps(self, results: List) -> List[RouteStep]:
+        """Convert routing results to RouteStep objects for visualization.
+
+        Args:
+            results: List of PathResult objects or legacy tuples
+
+        Returns:
+            List of RouteStep objects with full path information
+        """
         route_steps = []
+        step_number = 1
+
+        for result in results:
+            if hasattr(result, "path"):
+                # V4 PathResult format - has full path coordinates
+                path_coords = result.path
+                total_distance = result.distance
+
+                # For now, create a single step per result
+                # In a more detailed implementation, this could break down the path
+                # into individual segment traversals
+                if path_coords and len(path_coords) > 0:
+                    step = RouteStep(
+                        step_number=step_number,
+                        segment_id=f"cluster_{result.cluster_id}",
+                        direction="forward",
+                        is_deadhead=False,
+                        coordinates=path_coords,
+                        distance_meters=total_distance
+                    )
+                    route_steps.append(step)
+                    step_number += 1
+
+            else:
+                # Legacy format: (path, distance, cluster_id)
+                path, dist, cid = result
+                if path and len(path) > 0:
+                    step = RouteStep(
+                        step_number=step_number,
+                        segment_id=f"cluster_{cid}",
+                        direction="forward",
+                        is_deadhead=False,
+                        coordinates=path,
+                        distance_meters=dist
+                    )
+                    route_steps.append(step)
+                    step_number += 1
+
         return route_steps
 
     def _generate_visualizations(
