@@ -40,6 +40,30 @@ def setup_logging(verbose: bool = False):
     )
 
 
+def find_nearest_nodes(point, all_osm_nodes, max_distance=50.0, k=5):
+    """
+    Find k nearest OSM nodes to a point within max_distance meters.
+
+    Args:
+        point: (lat, lon) tuple
+        all_osm_nodes: List of (lat, lon) tuples from OSM
+        max_distance: Maximum distance in meters
+        k: Number of nearest nodes to return
+
+    Returns:
+        List of (node, distance) tuples
+    """
+    distances = []
+    for osm_node in all_osm_nodes:
+        dist = haversine(point, osm_node)
+        if dist <= max_distance:
+            distances.append((osm_node, dist))
+
+    # Return k nearest
+    distances.sort(key=lambda x: x[1])
+    return distances[:k]
+
+
 def build_graph_with_osm(segments, use_osm=True, logger=None):
     """
     Build routing graph from segments + OSM roads.
@@ -59,8 +83,14 @@ def build_graph_with_osm(segments, use_osm=True, logger=None):
 
     # Add segments to graph
     logger.info(f"Adding {len(segments)} segments to graph...")
+    segment_endpoints = set()  # Track segment endpoints for snapping
+
     for seg in segments:
         coords = seg.coordinates
+        # Track endpoints
+        segment_endpoints.add(coords[0])   # Start
+        segment_endpoints.add(coords[-1])  # End
+
         for i in range(len(coords) - 1):
             p1, p2 = coords[i], coords[i + 1]
             dist = haversine(p1, p2)
@@ -72,6 +102,7 @@ def build_graph_with_osm(segments, use_osm=True, logger=None):
 
     base_nodes = len(graph.id_to_node)
     logger.info(f"  ✓ Base graph: {base_nodes:,} nodes from segments")
+    logger.info(f"  ✓ Segment endpoints: {len(segment_endpoints):,}")
 
     # Add OSM roads if requested
     if use_osm:
@@ -105,10 +136,16 @@ def build_graph_with_osm(segments, use_osm=True, logger=None):
                 logger.info(f"  ✓ Found {len(osm_ways):,} OSM road segments")
                 logger.info("  Adding OSM roads to graph...")
 
+                # Collect all OSM nodes
+                osm_nodes = set()
                 osm_edges = 0
                 for way in osm_ways:
                     coords = way['geometry']
                     oneway = way.get('oneway', False)
+
+                    # Add all nodes from this way
+                    for coord in coords:
+                        osm_nodes.add(coord)
 
                     for i in range(len(coords) - 1):
                         p1, p2 = coords[i], coords[i + 1]
@@ -126,6 +163,24 @@ def build_graph_with_osm(segments, use_osm=True, logger=None):
                 total_nodes = len(graph.id_to_node)
                 logger.info(f"  ✓ Added {osm_edges:,} OSM edges")
                 logger.info(f"  ✓ Total graph: {total_nodes:,} nodes (added {total_nodes - base_nodes:,})")
+
+                # Snap segment endpoints to OSM network
+                logger.info("  Connecting segment endpoints to OSM network...")
+                osm_node_list = list(osm_nodes)
+                snap_edges = 0
+
+                for endpoint in segment_endpoints:
+                    # Find nearest OSM nodes within 50 meters
+                    nearest = find_nearest_nodes(endpoint, osm_node_list, max_distance=50.0, k=3)
+
+                    for osm_node, dist in nearest:
+                        # Add bidirectional edges to connect
+                        graph.add_edge(endpoint, osm_node, dist)
+                        graph.add_edge(osm_node, endpoint, dist)
+                        snap_edges += 2
+
+                logger.info(f"  ✓ Added {snap_edges:,} snap edges (connecting segments to OSM)")
+                logger.info(f"  ✓ Final graph: {len(graph.id_to_node):,} nodes")
             else:
                 logger.warning("  No OSM roads found in bbox")
 
