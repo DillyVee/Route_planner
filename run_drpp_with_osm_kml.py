@@ -40,6 +40,66 @@ def setup_logging(verbose: bool = False):
     )
 
 
+def build_spatial_grid(nodes, cell_size_deg=0.001):
+    """
+    Build spatial grid index for fast nearest neighbor search.
+
+    Args:
+        nodes: List of (lat, lon) tuples
+        cell_size_deg: Grid cell size in degrees (~0.001° ≈ 100m)
+
+    Returns:
+        Dict mapping (grid_lat, grid_lon) -> list of nodes
+    """
+    from collections import defaultdict
+    grid = defaultdict(list)
+
+    for node in nodes:
+        lat, lon = node
+        grid_lat = int(lat / cell_size_deg)
+        grid_lon = int(lon / cell_size_deg)
+        grid[(grid_lat, grid_lon)].append(node)
+
+    return grid
+
+
+def find_nearest_nodes_fast(point, spatial_grid, max_distance=50.0, k=5, cell_size_deg=0.001):
+    """
+    Find k nearest nodes using spatial grid index.
+
+    Args:
+        point: (lat, lon) tuple
+        spatial_grid: Dict from build_spatial_grid()
+        max_distance: Maximum distance in meters
+        k: Number of nearest nodes to return
+        cell_size_deg: Grid cell size used to build index
+
+    Returns:
+        List of (node, distance) tuples
+    """
+    lat, lon = point
+    grid_lat = int(lat / cell_size_deg)
+    grid_lon = int(lon / cell_size_deg)
+
+    # Check current cell and 8 neighbors (3x3 grid)
+    candidates = []
+    for dlat in [-1, 0, 1]:
+        for dlon in [-1, 0, 1]:
+            cell = (grid_lat + dlat, grid_lon + dlon)
+            candidates.extend(spatial_grid.get(cell, []))
+
+    # Calculate distances
+    distances = []
+    for candidate in candidates:
+        dist = haversine(point, candidate)
+        if dist <= max_distance:
+            distances.append((candidate, dist))
+
+    # Return k nearest
+    distances.sort(key=lambda x: x[1])
+    return distances[:k]
+
+
 def build_graph_with_osm(segments, use_osm=True, logger=None):
     """
     Build routing graph from segments + OSM roads.
@@ -59,8 +119,14 @@ def build_graph_with_osm(segments, use_osm=True, logger=None):
 
     # Add segments to graph
     logger.info(f"Adding {len(segments)} segments to graph...")
+    segment_endpoints = set()  # Track segment endpoints for snapping
+
     for seg in segments:
         coords = seg.coordinates
+        # Track endpoints
+        segment_endpoints.add(coords[0])   # Start
+        segment_endpoints.add(coords[-1])  # End
+
         for i in range(len(coords) - 1):
             p1, p2 = coords[i], coords[i + 1]
             dist = haversine(p1, p2)
@@ -72,6 +138,7 @@ def build_graph_with_osm(segments, use_osm=True, logger=None):
 
     base_nodes = len(graph.id_to_node)
     logger.info(f"  ✓ Base graph: {base_nodes:,} nodes from segments")
+    logger.info(f"  ✓ Segment endpoints: {len(segment_endpoints):,}")
 
     # Add OSM roads if requested
     if use_osm:
@@ -105,10 +172,16 @@ def build_graph_with_osm(segments, use_osm=True, logger=None):
                 logger.info(f"  ✓ Found {len(osm_ways):,} OSM road segments")
                 logger.info("  Adding OSM roads to graph...")
 
+                # Collect all OSM nodes
+                osm_nodes = set()
                 osm_edges = 0
                 for way in osm_ways:
                     coords = way['geometry']
                     oneway = way.get('oneway', False)
+
+                    # Add all nodes from this way
+                    for coord in coords:
+                        osm_nodes.add(coord)
 
                     for i in range(len(coords) - 1):
                         p1, p2 = coords[i], coords[i + 1]
@@ -126,6 +199,31 @@ def build_graph_with_osm(segments, use_osm=True, logger=None):
                 total_nodes = len(graph.id_to_node)
                 logger.info(f"  ✓ Added {osm_edges:,} OSM edges")
                 logger.info(f"  ✓ Total graph: {total_nodes:,} nodes (added {total_nodes - base_nodes:,})")
+
+                # Snap segment endpoints to OSM network
+                logger.info("  Connecting segment endpoints to OSM network...")
+                logger.info("  Building spatial index...")
+                spatial_grid = build_spatial_grid(list(osm_nodes))
+                logger.info(f"  ✓ Spatial index built ({len(spatial_grid):,} cells)")
+
+                snap_edges = 0
+                endpoints_connected = 0
+
+                for endpoint in segment_endpoints:
+                    # Find nearest OSM nodes within 50 meters using spatial index
+                    nearest = find_nearest_nodes_fast(endpoint, spatial_grid, max_distance=50.0, k=3)
+
+                    if nearest:
+                        endpoints_connected += 1
+                        for osm_node, dist in nearest:
+                            # Add bidirectional edges to connect
+                            graph.add_edge(endpoint, osm_node, dist)
+                            graph.add_edge(osm_node, endpoint, dist)
+                            snap_edges += 2
+
+                logger.info(f"  ✓ Connected {endpoints_connected:,}/{len(segment_endpoints):,} endpoints to OSM")
+                logger.info(f"  ✓ Added {snap_edges:,} snap edges")
+                logger.info(f"  ✓ Final graph: {len(graph.id_to_node):,} nodes")
             else:
                 logger.warning("  No OSM roads found in bbox")
 
