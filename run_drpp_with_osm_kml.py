@@ -63,7 +63,7 @@ def build_graph_with_osm(segments, use_osm=True, logger=None):
         coords = seg.coordinates
         for i in range(len(coords) - 1):
             p1, p2 = coords[i], coords[i + 1]
-            dist = haversine(p1[0], p1[1], p2[0], p2[1])
+            dist = haversine(p1, p2)
 
             if seg.forward_required:
                 graph.add_edge(p1, p2, dist)
@@ -112,7 +112,7 @@ def build_graph_with_osm(segments, use_osm=True, logger=None):
 
                     for i in range(len(coords) - 1):
                         p1, p2 = coords[i], coords[i + 1]
-                        dist = haversine(p1[0], p1[1], p2[0], p2[1])
+                        dist = haversine(p1, p2)
 
                         # Add forward direction
                         graph.add_edge(p1, p2, dist)
@@ -201,8 +201,7 @@ def route_segments_greedy(segments, graph, logger=None):
 
         # Add segment itself
         seg_dist = sum(
-            haversine(seg.coordinates[i][0], seg.coordinates[i][1],
-                     seg.coordinates[i+1][0], seg.coordinates[i+1][1])
+            haversine(seg.coordinates[i], seg.coordinates[i+1])
             for i in range(len(seg.coordinates) - 1)
         )
 
