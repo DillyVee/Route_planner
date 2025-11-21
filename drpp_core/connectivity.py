@@ -75,43 +75,77 @@ class ConnectivityAnalyzer:
 
     def _strongconnect(self, node: NodeID) -> None:
         """
-        Tarjan's algorithm recursive helper.
+        Tarjan's algorithm iterative implementation.
 
         This is the core SCC detection algorithm (O(V + E) complexity).
+        Iterative version to avoid RecursionError on large graphs.
         """
-        # Set the depth index for this node
-        self.index[node] = self.index_counter
-        self.lowlinks[node] = self.index_counter
-        self.index_counter += 1
-        self.stack.append(node)
-        self.on_stack.add(node)
+        # Call stack for iterative DFS: (node, successor_iter, is_return_visit)
+        call_stack = [(node, 0, False)]
 
-        # Consider successors of node
-        for edge in self.adjacency.get(node, []):
-            successor = edge.to_node
+        while call_stack:
+            current, succ_idx, is_return = call_stack.pop()
 
-            if successor not in self.index:
-                # Successor has not yet been visited; recurse on it
-                self._strongconnect(successor)
-                self.lowlinks[node] = min(self.lowlinks[node], self.lowlinks[successor])
-            elif successor in self.on_stack:
-                # Successor is in stack and hence in the current SCC
-                self.lowlinks[node] = min(self.lowlinks[node], self.index[successor])
+            if not is_return:
+                # First visit to this node
+                if current in self.index:
+                    continue
 
-        # If node is a root node, pop the stack and create a new SCC
-        if self.lowlinks[node] == self.index[node]:
-            component_nodes: Set[NodeID] = set()
+                # Set the depth index for this node
+                self.index[current] = self.index_counter
+                self.lowlinks[current] = self.index_counter
+                self.index_counter += 1
+                self.stack.append(current)
+                self.on_stack.add(current)
 
-            while True:
-                w = self.stack.pop()
-                self.on_stack.remove(w)
-                component_nodes.add(w)
-                if w == node:
+            # Get successors
+            successors = self.adjacency.get(current, [])
+
+            # Process successors starting from succ_idx
+            processed_successor = False
+            for i in range(succ_idx, len(successors)):
+                edge = successors[i]
+                successor = edge.to_node
+
+                if successor not in self.index:
+                    # Need to visit successor first
+                    # Push current back with updated index to continue after
+                    call_stack.append((current, i, True))
+                    # Push successor to visit
+                    call_stack.append((successor, 0, False))
+                    processed_successor = True
                     break
+                elif successor in self.on_stack:
+                    # Successor is in stack and hence in the current SCC
+                    self.lowlinks[current] = min(self.lowlinks[current], self.index[successor])
 
-            # Create component with edges
-            component = self._create_component(len(self.components), component_nodes)
-            self.components.append(component)
+            if processed_successor:
+                continue
+
+            # All successors processed or returning from recursive call
+            if is_return and call_stack:
+                # Update parent's lowlink
+                parent_node = call_stack[-1][0] if call_stack else None
+                if parent_node and parent_node in self.lowlinks:
+                    self.lowlinks[parent_node] = min(
+                        self.lowlinks[parent_node],
+                        self.lowlinks[current]
+                    )
+
+            # If current is a root node, pop the stack and create a new SCC
+            if self.lowlinks[current] == self.index[current]:
+                component_nodes: Set[NodeID] = set()
+
+                while True:
+                    w = self.stack.pop()
+                    self.on_stack.remove(w)
+                    component_nodes.add(w)
+                    if w == current:
+                        break
+
+                # Create component with edges
+                component = self._create_component(len(self.components), component_nodes)
+                self.components.append(component)
 
     def _create_component(self, component_id: int, nodes: Set[NodeID]) -> ConnectedComponent:
         """Create a ConnectedComponent from a set of nodes."""
