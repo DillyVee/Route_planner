@@ -281,9 +281,37 @@ class DRPPPipeline:
                                 segment_id = field_value
                             elif field_name == "Dir":
                                 # Dir field might indicate direction
-                                # Common values: 'N', 'S', 'E', 'W', 'NB', 'SB', 'EB', 'WB'
-                                # For now, preserve in metadata
+                                # MapPlus/Duweis format:
+                                #   'I' = Increasing direction (one-way)
+                                #   'D' = Decreasing direction (one-way, opposite)
+                                #   'B' or 'T' = Both/Two-way (bidirectional)
+                                # Other formats: 'N', 'S', 'E', 'W', 'NB', 'SB', 'EB', 'WB'
                                 metadata["direction_code"] = field_value
+
+                                # Check if this indicates one-way
+                                dir_upper = field_value.strip().upper()
+                                if dir_upper in ('I', 'D'):
+                                    # MapPlus one-way: I=Increasing, D=Decreasing
+                                    oneway = True
+                                    if dir_upper == 'D':
+                                        # Decreasing means travel opposite to line direction
+                                        # Swap forward/backward requirements
+                                        forward_required = False
+                                        backward_required = True
+                                    else:
+                                        # Increasing means travel along line direction
+                                        forward_required = True
+                                        backward_required = False
+                                elif dir_upper in ('B', 'T', 'TWO', 'BOTH'):
+                                    # Explicitly two-way
+                                    oneway = False
+                                    forward_required = True
+                                    backward_required = True
+                                elif dir_upper in ('EB', 'WB', 'NB', 'SB', 'E', 'W', 'N', 'S'):
+                                    # Cardinal direction one-way
+                                    oneway = True
+                                    forward_required = True
+                                    backward_required = False
                             elif field_name == "RouteName":
                                 metadata["route_name"] = field_value
                             elif field_name == "LengthFt":
@@ -345,20 +373,23 @@ class DRPPPipeline:
             # - Most are two-way unless specifically marked one-way
             # - Use 'Dir' field or 'oneway' field if available
 
-            if oneway is True:
-                # Explicitly one-way
-                forward_required = True
-                backward_required = False
-            elif oneway is False:
-                # Explicitly two-way
-                forward_required = True
-                backward_required = True
-            else:
-                # Default behavior for roadway surveys:
-                # Assume both directions required unless specified otherwise
-                # This ensures complete coverage for survey routes
-                forward_required = True
-                backward_required = True
+            # Only set defaults if not already determined by Dir field
+            # (Dir field sets both forward_required and backward_required explicitly)
+            if forward_required is None and backward_required is None:
+                if oneway is True:
+                    # Explicitly one-way (but Dir didn't specify which direction)
+                    forward_required = True
+                    backward_required = False
+                elif oneway is False:
+                    # Explicitly two-way
+                    forward_required = True
+                    backward_required = True
+                else:
+                    # Default behavior for roadway surveys:
+                    # Assume both directions required unless specified otherwise
+                    # This ensures complete coverage for survey routes
+                    forward_required = True
+                    backward_required = True
 
             segments.append(
                 SegmentRequirement(
