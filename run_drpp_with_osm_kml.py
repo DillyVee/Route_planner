@@ -112,13 +112,14 @@ def find_nearest_nodes_fast(point, spatial_grid, max_distance=50.0, k=5, cell_si
     return distances[:k]
 
 
-def build_graph_with_osm(segments, use_osm=True, logger=None):
+def build_graph_with_osm(segments, use_osm=True, snap_tolerance=200.0, logger=None):
     """
     Build routing graph from segments + OSM roads.
 
     Args:
         segments: Parsed segments from KML
         use_osm: Whether to fetch OSM roads
+        snap_tolerance: Distance in meters for snapping endpoints to OSM (default: 200)
         logger: Logger instance
 
     Returns:
@@ -222,8 +223,8 @@ def build_graph_with_osm(segments, use_osm=True, logger=None):
                 endpoints_connected = 0
 
                 for endpoint in segment_endpoints:
-                    # Find nearest OSM nodes within 50 meters using spatial index
-                    nearest = find_nearest_nodes_fast(endpoint, spatial_grid, max_distance=50.0, k=3)
+                    # Find nearest OSM nodes using spatial index
+                    nearest = find_nearest_nodes_fast(endpoint, spatial_grid, max_distance=snap_tolerance, k=5)
 
                     if nearest:
                         endpoints_connected += 1
@@ -233,8 +234,11 @@ def build_graph_with_osm(segments, use_osm=True, logger=None):
                             graph.add_edge(osm_node, endpoint, dist)
                             snap_edges += 2
 
-                logger.info(f"  ✓ Connected {endpoints_connected:,}/{len(segment_endpoints):,} endpoints to OSM")
+                logger.info(f"  ✓ Connected {endpoints_connected:,}/{len(segment_endpoints):,} endpoints to OSM ({snap_tolerance}m tolerance)")
                 logger.info(f"  ✓ Added {snap_edges:,} snap edges")
+                if endpoints_connected < len(segment_endpoints):
+                    unconnected = len(segment_endpoints) - endpoints_connected
+                    logger.warning(f"  ⚠ {unconnected:,} endpoints NOT connected (try --snap-tolerance {snap_tolerance * 2:.0f})")
                 logger.info(f"  ✓ Final graph: {len(graph.id_to_node):,} nodes")
             else:
                 logger.warning("  No OSM roads found in bbox")
@@ -547,6 +551,8 @@ def main():
                        help='Skip OSM fetch (use segment-only routing)')
     parser.add_argument('--max-distance', type=float, default=None,
                        help='Maximum search distance in km (default: unlimited). Use 10-50 for dense areas, unlimited for sparse areas.')
+    parser.add_argument('--snap-tolerance', type=float, default=200.0,
+                       help='Endpoint snapping tolerance in meters (default: 200). Increase if segments are unreachable.')
     parser.add_argument('--verbose', '-v', action='store_true',
                        help='Enable verbose logging')
 
@@ -582,7 +588,9 @@ def main():
     # Step 2: Build graph with OSM
     logger.info("")
     logger.info("[2/4] Building routing graph...")
-    graph = build_graph_with_osm(segments, use_osm=not args.no_osm, logger=logger)
+    logger.info(f"  Snap tolerance: {args.snap_tolerance}m")
+    graph = build_graph_with_osm(segments, use_osm=not args.no_osm,
+                                  snap_tolerance=args.snap_tolerance, logger=logger)
 
     # Step 3: Route segments
     logger.info("")
