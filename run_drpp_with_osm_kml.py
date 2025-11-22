@@ -13,15 +13,20 @@ Output is compatible with MapPlus/Duweis.
 PERFORMANCE OPTIMIZATIONS (100-1000x faster than previous version):
 - Uses drpp_core.greedy_route_cluster with on-demand Dijkstra
 - Computes Dijkstra ONCE per iteration (not per segment)
-- Limits search distance to 10km radius
+- Optional distance limiting for dense areas (--max-distance)
 - Pure greedy with no lookahead overhead (lookahead_depth=1)
 
 Usage:
+    # For large sparse areas (like entire state):
     python run_drpp_with_osm_kml.py PA_2025_Region2.kml --output-dir output
 
+    # For dense urban areas (optional distance limit):
+    python run_drpp_with_osm_kml.py urban_area.kml --max-distance 20
+
 Options:
-    --no-osm         Skip OSM fetch (use straight-line routing)
-    --verbose        Show detailed progress
+    --no-osm            Skip OSM fetch (use straight-line routing)
+    --max-distance KM   Maximum search distance in km (default: unlimited)
+    --verbose           Show detailed progress
 """
 
 import argparse
@@ -241,14 +246,20 @@ def build_graph_with_osm(segments, use_osm=True, logger=None):
     return graph
 
 
-def route_segments_greedy(segments, graph, logger=None):
+def route_segments_greedy(segments, graph, max_distance_km=None, logger=None):
     """
     Route through segments using OPTIMIZED greedy on-demand algorithm.
 
     Uses drpp_core.greedy_route_cluster with performance optimizations:
     - On-demand Dijkstra (computes once per iteration, not per segment)
-    - Distance limiting (max_search_distance=10km)
+    - Optional distance limiting (for dense areas)
     - Pure greedy (lookahead_depth=1, no O(n²) lookahead)
+
+    Args:
+        segments: List of segments to route
+        graph: DirectedGraph with OSM roads
+        max_distance_km: Maximum search distance in km (None = unlimited)
+        logger: Logger instance
 
     Returns:
         List of (segment, path, distance) tuples in route order
@@ -259,7 +270,13 @@ def route_segments_greedy(segments, graph, logger=None):
     logger.info("Running OPTIMIZED greedy routing algorithm...")
     logger.info(f"  Segments to route: {len(segments)}")
     logger.info(f"  Graph nodes: {len(graph.id_to_node):,}")
-    logger.info("  Using: on-demand Dijkstra, max_search_distance=10km, lookahead_depth=1")
+
+    max_search_distance = None
+    if max_distance_km is not None:
+        max_search_distance = max_distance_km * 1000  # Convert km to meters
+        logger.info(f"  Using: on-demand Dijkstra, max_search_distance={max_distance_km}km, lookahead_depth=1")
+    else:
+        logger.info(f"  Using: on-demand Dijkstra, unlimited search distance, lookahead_depth=1")
 
     # Convert segments to required_edges format
     # Format: (start_coord, end_coord, coordinates_list)
@@ -282,9 +299,9 @@ def route_segments_greedy(segments, graph, logger=None):
         required_edges=required_edges,
         segment_indices=list(range(len(required_edges))),
         start_node=start_node,
-        use_ondemand=True,         # On-demand mode: compute Dijkstra once per iteration
-        lookahead_depth=1,         # Pure greedy: no lookahead (avoids O(n²) overhead)
-        max_search_distance=10000  # Limit search to 10km radius (10,000 meters)
+        use_ondemand=True,              # On-demand mode: compute Dijkstra once per iteration
+        lookahead_depth=1,              # Pure greedy: no lookahead (avoids O(n²) overhead)
+        max_search_distance=max_search_distance  # Distance limit in meters (None = unlimited)
     )
 
     logger.info(f"  ✓ Greedy routing complete:")
@@ -528,6 +545,8 @@ def main():
     parser.add_argument('--output-dir', default='output', help='Output directory')
     parser.add_argument('--no-osm', action='store_true',
                        help='Skip OSM fetch (use segment-only routing)')
+    parser.add_argument('--max-distance', type=float, default=None,
+                       help='Maximum search distance in km (default: unlimited). Use 10-50 for dense areas, unlimited for sparse areas.')
     parser.add_argument('--verbose', '-v', action='store_true',
                        help='Enable verbose logging')
 
@@ -568,7 +587,7 @@ def main():
     # Step 3: Route segments
     logger.info("")
     logger.info("[3/4] Computing route...")
-    route = route_segments_greedy(segments, graph, logger=logger)
+    route = route_segments_greedy(segments, graph, max_distance_km=args.max_distance, logger=logger)
 
     # Step 4: Export KML
     logger.info("")
