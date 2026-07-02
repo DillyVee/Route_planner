@@ -101,33 +101,43 @@ Field workflow:
 
 ## Daily planner (hotel loops)
 
-`Daily_Planner.py` turns the remaining segments into **3–5 balanced daily
-routes** that each start and end at your hotel and meet a minimum mileage:
+`Daily_Planner.py` turns the remaining segments into **balanced daily
+routes** that each start and end at your hotel and fit inside a driving
+shift (`--hours`, default 6 — wiggle room for gas and breaks inside an
+8-hour day):
 
 ```bash
-python Daily_Planner.py segments.mpz --hotel "8051 Peach St, Erie PA" --min-miles 120
-python Daily_Planner.py segments.mpz --hotel 42.05,-80.08 --min-miles 120 --days 4
-python Daily_Planner.py segments.mpz --hotel 42.05,-80.08 --min-miles 120 --lock 1
+python Daily_Planner.py segments.mpz --hotel "8051 Peach St, Erie PA"
+python Daily_Planner.py segments.mpz --hotel 42.05,-80.08 --hours 6 --days 4
+python Daily_Planner.py segments.mpz --hotel 42.05,-80.08 --lock 1
 ```
 
 How it balances the days:
 
 1. Continuous runs are swept by compass bearing around the hotel into one
-   wedge per day, each holding about the same collection mileage. Wedges
+   wedge per day, each holding about the same collection time. Wedges
    keep every day's work in one compact area, so finishing a day never
    strands isolated segments in another day's territory — what remains is
    still clustered for tomorrow.
 2. Each day is solved as a real road route (same engine as
    `Route_Planner.py`: OSM network, blue/pink directions, transfers on
    roads) from the hotel through its wedge and back.
-3. Days are rebalanced on true driven miles: boundary runs shift from the
-   heaviest day into the neighboring lighter day until no day is
-   dramatically bigger than another — a run may leave its locally optimal
-   day if that keeps the whole week consistent.
+3. Days are rebalanced on true driving time: boundary runs shift between
+   neighboring days until no day is dramatically bigger than another — a
+   run may leave its locally optimal day if that keeps the whole week
+   consistent.
+4. The shift cap is hard. If the days run over, more days are added
+   (up to `--days`, default 5); if it still doesn't fit, days shed their
+   **nearest-to-hotel** runs into an unplanned **filler pool** — far
+   segments always stay inside a planned, time-boxed day so a shift never
+   ends with a long drive home, and the filler near the hotel is what you
+   grab when a day finishes early.
 
-Every route is printed with total miles, collection vs deadhead split,
-estimated hours, and the segment collection order (`123I` = CollId 123 blue
-/ with the arrows, `456D` = pink / against them).
+Every route is printed with estimated hours against the shift, total miles,
+collection vs deadhead split, and the segment collection order (`123I` =
+CollId 123 blue / with the arrows, `456D` = pink / against them).
+`--min-miles` is optional and only flags routes under the threshold —
+balance is driven by time.
 
 Outputs (in `--out-dir`, default `daily_plan/`):
 
@@ -143,6 +153,8 @@ Daily workflow: preview the plan, lock in the route you'll drive
 (`--lock 1`), collect it, then re-run tomorrow on
 `remaining_segments.mpz` — or on a fresh Map Plus export with
 `Collected = Yes` set — and get a fresh balanced plan over what's left.
+Finished early? Grab filler segments near the hotel, mark them collected,
+and the next re-run accounts for everything automatically.
 
 ## Input format
 

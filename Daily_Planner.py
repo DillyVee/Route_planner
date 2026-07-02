@@ -4,32 +4,41 @@ Daily Survey Route Planner
 ==========================
 
 Builds a balanced multi-day collection plan from a hotel: several complete
-daily routes that each start and end at the hotel, meet a minimum daily
-mileage, and stay consistent in effort from day to day - the goal is a
+daily routes that each start and end at the hotel, fit inside a driving-time
+shift, and stay consistent in effort from day to day - the goal is a
 sustainable field schedule, not one great day followed by garbage days of
 scattered leftovers.
+
+Time is the budget: --hours caps each day's estimated driving (default 6 h,
+which leaves wiggle room for gas and breaks inside an 8-hour shift). Every
+route ends back at the hotel within that cap. When there is more work than
+the planned days can hold, runs close to the hotel are left unplanned as
+safe end-of-shift filler - far-away segments always stay inside a planned,
+time-boxed day so you are never stranded far out when the shift ends.
 
 How the balance works
 ---------------------
 1. Segments are grouped into continuous runs (chains) and swept by compass
    bearing around the hotel into one wedge per day, each wedge holding about
-   the same survey mileage. Wedges keep every day's work in one compact
+   the same collection time. Wedges keep every day's work in one compact
    area, so collecting a day never strands isolated segments inside another
    day's territory - the lookahead is structural: whatever remains after a
    day is still clustered for the following days.
 2. Every day is then solved as a real road route (same engine as
    Route_Planner: OSM road network, direction-aware, transfers always on
    roads) from the hotel, through its wedge, and back to the hotel.
-3. Days are rebalanced on their true driven totals: boundary runs shift
+3. Days are rebalanced on their true driving time: boundary runs shift
    from the heaviest day into the angularly adjacent lighter day - a run
-   may leave its locally optimal day if that keeps tomorrow's mileage
-   consistent - until no single day is dramatically bigger than another.
+   may leave its locally optimal day if that keeps tomorrow consistent -
+   until no single day is dramatically bigger than another.
+4. Days still over the shift cap shed their nearest-to-hotel runs into the
+   unplanned filler pool until they fit.
 
 Usage
 -----
-    python Daily_Planner.py segments.mpz --hotel "8051 Peach St, Erie PA" --min-miles 120
-    python Daily_Planner.py segments.mpz --hotel 42.05,-80.09 --min-miles 120 --days 4
-    python Daily_Planner.py segments.mpz --hotel 42.05,-80.09 --min-miles 120 --lock 1
+    python Daily_Planner.py segments.mpz --hotel "8051 Peach St, Erie PA"
+    python Daily_Planner.py segments.mpz --hotel 42.05,-80.09 --hours 6 --days 4
+    python Daily_Planner.py segments.mpz --hotel 42.05,-80.09 --lock 1
 
 Outputs (in --out-dir, default daily_plan/):
     day_N.mpz / day_N.gpx   one complete hotel-to-hotel route per day
@@ -40,13 +49,15 @@ Outputs (in --out-dir, default daily_plan/):
 
 Workflow: preview the plan, lock in the day you will drive (--lock N or the
 interactive prompt), collect it, then re-run on remaining_segments.mpz (or
-on a fresh Map Plus export with Collected=Yes set) for the next day.
+on a fresh Map Plus export with Collected=Yes set) for the next day. If a
+day finishes early, grab unplanned filler segments near the hotel and mark
+them collected - the next re-run accounts for everything automatically.
 """
 
 import argparse
 import os
 import sys
-from math import atan2, cos, pi, radians, sin
+from math import atan2, ceil, cos, pi, radians, sin
 
 from Route_Planner import (
     DEFAULT_SPEED_KMH, OVERPASS_CACHE_DIR, apply_osm_speeds, build_graph,
@@ -58,6 +69,10 @@ from Route_Planner import (
 MILES_PER_M = 1 / 1609.344
 DAY_COLORS = ["#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4",
               "#008080", "#9a6324"]
+# Rough share of a day expected to be actual collection (the rest is
+# transfers + the drive out and back); only used to size the initial day
+# count - the real cap is enforced on solved routes.
+COLLECTION_SHARE = 0.6
 
 
 # ============================================================================
@@ -125,7 +140,7 @@ def _centroid(chain):
 
 
 def sweep_partition(chains, hotel, days):
-    """Split chains into `days` compass wedges of roughly equal survey work.
+    """Split chains into `days` compass wedges of roughly equal collection time.
 
     Returns a list of `days` lists of chain indices, in sweep order, so
     adjacent groups are also adjacent on the ground (which is what lets the
@@ -144,15 +159,15 @@ def sweep_partition(chains, hotel, days):
     seam = (gaps.index(max(gaps)) + 1) % len(order)
     order = order[seam:] + order[:seam]
 
-    total = sum(chains[ci]["length_m"] for ci in order)
+    total = sum(chains[ci]["time_s"] for ci in order)
     target = total / days
     groups = [[] for _ in range(days)]
     cum = 0.0
     for ci in order:
-        mid = cum + chains[ci]["length_m"] / 2
+        mid = cum + chains[ci]["time_s"] / 2
         day = min(int(mid / target), days - 1)
         groups[day].append(ci)
-        cum += chains[ci]["length_m"]
+        cum += chains[ci]["time_s"]
 
     # A huge single run can leave a wedge empty; steal from a neighbor.
     for day in range(days):
@@ -221,58 +236,98 @@ def day_hours(day):
 
 
 def rebalance(graph, chains, groups, solved, hotel, log, max_moves=10):
-    """Even out the days on their true driven mileage.
+    """Even out the days on their true driving time.
 
     Shifts a boundary run from the heaviest day into the angularly adjacent
     lighter day and re-solves both; a move is kept only when it shrinks the
     gap between the heaviest and lightest day. This deliberately accepts a
     slightly worse single day when it keeps the whole plan consistent.
     """
+    if len(solved) < 2:
+        return groups, solved
     for _ in range(max_moves):
-        miles = [day_total_mi(d) for d in solved]
-        avg = sum(miles) / len(miles)
-        spread = max(miles) - min(miles)
+        hours = [day_hours(d) for d in solved]
+        avg = sum(hours) / len(hours)
+        spread = max(hours) - min(hours)
         if spread <= 0.15 * avg:
             break
-        hi = miles.index(max(miles))
+        hi = hours.index(max(hours))
+        lo = hours.index(min(hours))
 
+        # Candidate moves (src day, dst day, boundary position in src):
+        # the heaviest day gives a boundary run to a lighter neighbor, or
+        # the lightest day takes one from a heavier neighbor.
         candidates = []
-        if hi > 0 and len(groups[hi]) > 1 and miles[hi - 1] < miles[hi]:
-            candidates.append((hi - 1, 0))   # give first run to previous day
-        if (hi < len(groups) - 1 and len(groups[hi]) > 1
-                and miles[hi + 1] < miles[hi]):
-            candidates.append((hi + 1, -1))  # give last run to next day
-        if not candidates:
-            break
+        if hi > 0 and hours[hi - 1] < hours[hi]:
+            candidates.append((hi, hi - 1, 0))
+        if hi < len(groups) - 1 and hours[hi + 1] < hours[hi]:
+            candidates.append((hi, hi + 1, -1))
+        if lo > 0 and hours[lo - 1] > hours[lo]:
+            candidates.append((lo - 1, lo, -1))
+        if lo < len(groups) - 1 and hours[lo + 1] > hours[lo]:
+            candidates.append((lo + 1, lo, 0))
 
-        improved = False
-        for dst, pos in candidates:
-            ci = groups[hi][pos]
-            new_hi = [c for c in groups[hi] if c != ci]
+        best = None
+        for src, dst, pos in candidates:
+            if len(groups[src]) <= 1:
+                continue
+            ci = groups[src][pos]
+            new_src = [c for c in groups[src] if c != ci]
             new_dst = ([ci] + groups[dst]) if pos == -1 else (groups[dst] + [ci])
-            trial_hi = solve_day(graph, chains, new_hi, hotel)
+            trial_src = solve_day(graph, chains, new_src, hotel)
             trial_dst = solve_day(graph, chains, new_dst, hotel)
-            trial_miles = list(miles)
-            trial_miles[hi] = day_total_mi(trial_hi)
-            trial_miles[dst] = day_total_mi(trial_dst)
-            if max(trial_miles) - min(trial_miles) < spread:
-                groups[hi], groups[dst] = new_hi, new_dst
-                solved[hi], solved[dst] = trial_hi, trial_dst
-                improved = True
-                log(f"  Rebalance: moved a run from day {hi + 1} "
-                    f"to day {dst + 1} "
-                    f"({', '.join(f'{m:.0f}' for m in trial_miles)} mi)")
-                break
-        if not improved:
+            trial_hours = list(hours)
+            trial_hours[src] = day_hours(trial_src)
+            trial_hours[dst] = day_hours(trial_dst)
+            trial_spread = max(trial_hours) - min(trial_hours)
+            if trial_spread < spread and (best is None or trial_spread < best[0]):
+                best = (trial_spread, src, dst, new_src, new_dst,
+                        trial_src, trial_dst, trial_hours)
+
+        if best is None:
             break
+        _, src, dst, new_src, new_dst, trial_src, trial_dst, trial_hours = best
+        groups[src], groups[dst] = new_src, new_dst
+        solved[src], solved[dst] = trial_src, trial_dst
+        log(f"  Rebalance: moved a run from day {src + 1} to day {dst + 1} "
+            f"({', '.join(f'{h:.1f}' for h in trial_hours)} h)")
     return groups, solved
+
+
+def trim_to_shift(graph, chains, groups, solved, hotel, max_hours, log):
+    """Shed work from days that exceed the shift until they fit.
+
+    Runs closest to the hotel are dropped first: they are the safe ones to
+    leave unplanned (easy to grab with spare time at the end of any shift),
+    while far-away runs must stay inside a planned, time-boxed day so the
+    shift never ends with a long drive home. Returns the dropped chain
+    indices (the filler pool).
+    """
+    filler = []
+    for di in range(len(groups)):
+        while day_hours(solved[di]) > max_hours and len(groups[di]) > 1:
+            ci = min(groups[di],
+                     key=lambda c: haversine(hotel, _centroid(chains[c])))
+            groups[di].remove(ci)
+            filler.append(ci)
+            solved[di] = solve_day(graph, chains, groups[di], hotel)
+        if day_hours(solved[di]) > max_hours:
+            log(f"  WARNING: day {di + 1} is a single run that alone takes "
+                f"{day_hours(solved[di]):.1f} h - it cannot fit the "
+                f"{max_hours:.1f} h shift")
+    if filler:
+        mi = sum(chains[ci]["length_m"] for ci in filler) * MILES_PER_M
+        log(f"  {len(filler)} runs ({mi:.0f} mi) near the hotel left "
+            f"unplanned as end-of-shift filler - far segments stay inside "
+            f"time-boxed days")
+    return filler
 
 
 # ============================================================================
 # Reporting + outputs
 # ============================================================================
 
-def print_plan(solved, min_miles, log=print):
+def print_plan(solved, max_hours, min_miles, filler_info, log=print):
     log("\n" + "=" * 64)
     log("MULTI-DAY PLAN")
     log("=" * 64)
@@ -280,14 +335,18 @@ def print_plan(solved, min_miles, log=print):
         total_mi = day_total_mi(day)
         survey_mi = day_survey_mi(day)
         dh_mi = day_deadhead_mi(day)
+        hours = day_hours(day)
         eff = survey_mi / total_mi * 100 if total_mi else 0
         visits = build_visits(day["chains"], day["legs"])
-        ok = "OK" if total_mi >= min_miles else "UNDER MINIMUM"
+        fit = "fits" if hours <= max_hours else "OVER"
         log(f"\n--- Route {n} -------------------------------------------------")
-        log(f"  {total_mi:6.1f} mi total  =  {survey_mi:.1f} mi collection "
-            f"+ {dh_mi:.1f} mi deadhead (incl. return to hotel)")
-        log(f"  {len(visits)} segments | ~{day_hours(day):.1f} h driving | "
-            f"efficiency {eff:.0f}% | minimum {min_miles:.0f} mi: {ok}")
+        log(f"  ~{hours:.1f} h driving ({fit} the {max_hours:.1f} h shift) | "
+            f"{total_mi:.1f} mi total = {survey_mi:.1f} mi collection "
+            f"+ {dh_mi:.1f} mi deadhead (incl. return)")
+        log(f"  {len(visits)} segments | efficiency {eff:.0f}%"
+            + (f" | minimum {min_miles:.0f} mi: "
+               f"{'OK' if total_mi >= min_miles else 'UNDER'}"
+               if min_miles else ""))
         if day["wrong_way_return"]:
             log("  Note: return leg ignores one-way restrictions")
         log("  Collection order:")
@@ -303,16 +362,21 @@ def print_plan(solved, min_miles, log=print):
         if line:
             log("    " + "  ".join(line))
 
+    hours = [day_hours(d) for d in solved]
     miles = [day_total_mi(d) for d in solved]
     log("\n" + "-" * 64)
-    log(f"  Plan: {len(solved)} days | "
-        f"{sum(miles):.0f} mi total | "
-        f"days range {min(miles):.0f}-{max(miles):.0f} mi | "
-        f"spread {(max(miles) - min(miles)) / (sum(miles) / len(miles)) * 100:.0f}% of average")
+    spread = ((max(hours) - min(hours)) / (sum(hours) / len(hours)) * 100
+              if len(hours) > 1 else 0)
+    log(f"  Plan: {len(solved)} days | {sum(miles):.0f} mi | "
+        f"days {min(hours):.1f}-{max(hours):.1f} h | "
+        f"day-to-day spread {spread:.0f}% of average")
+    if filler_info:
+        log(f"  Filler pool: {filler_info} - grab these near-hotel segments "
+            f"whenever a shift ends early, then re-run")
     log("  (I = blue, drive WITH the arrows; D = pink, drive AGAINST them)")
 
 
-def write_plan_html(solved, hotel, collected, filename):
+def write_plan_html(solved, hotel, collected, filler_chains, filename):
     """One Leaflet map with every day's loop in its own color."""
     import json as _json
     days = []
@@ -327,7 +391,9 @@ def write_plan_html(solved, hotel, collected, filename):
         })
     data = {"days": days, "hotel": list(hotel),
             "collected": [[[lat, lon] for lat, lon in s["digitized_coords"]]
-                          for s in collected]}
+                          for s in collected],
+            "filler": [[[lat, lon] for lat, lon in c["coords"]]
+                       for c in filler_chains]}
 
     html = """<!DOCTYPE html>
 <html><head><meta charset="utf-8">
@@ -352,6 +418,9 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
             {maxZoom: 19, attribution: '&copy; OpenStreetMap'}).addTo(map);
 data.collected.forEach(c => L.polyline(c,
   {color: '#888', weight: 2, opacity: .4, dashArray: '4 6'}).addTo(map));
+data.filler.forEach(c => L.polyline(c,
+  {color: '#222', weight: 3, opacity: .6, dashArray: '2 8'})
+  .bindPopup('Unplanned filler - near the hotel, grab with spare time').addTo(map));
 let bounds = null;
 const legend = document.getElementById('legend');
 data.days.forEach(d => {
@@ -360,8 +429,10 @@ data.days.forEach(d => {
                d.segments + ' segments, ~' + d.hours + ' h').addTo(map);
   bounds = bounds ? bounds.extend(line.getBounds()) : line.getBounds();
   legend.innerHTML += '<span class="sw" style="background:' + d.color + '"></span>'
-    + d.label + ': ' + d.miles + ' mi, ' + d.segments + ' seg, ~' + d.hours + ' h<br>';
+    + d.label + ': ~' + d.hours + ' h, ' + d.miles + ' mi<br>';
 });
+if (data.filler.length) legend.innerHTML +=
+  '<span class="sw" style="background:#222"></span>filler (unplanned)<br>';
 L.marker(data.hotel).bindPopup('<b>HOTEL</b> - every route starts and ends here')
   .addTo(map);
 if (bounds) map.fitBounds(bounds.pad(0.05));
@@ -375,8 +446,8 @@ if (bounds) map.fitBounds(bounds.pad(0.05));
 # Pipeline
 # ============================================================================
 
-def plan_days(input_path, hotel_text, min_miles, days=None, lock=None,
-              out_dir="daily_plan", use_osm=True,
+def plan_days(input_path, hotel_text, max_hours=6.0, min_miles=None,
+              days=None, lock=None, out_dir="daily_plan", use_osm=True,
               cache_dir=OVERPASS_CACHE_DIR, log=print):
     hotel = resolve_hotel(hotel_text, log=log)
     log(f"  Hotel position: {hotel[0]:.5f}, {hotel[1]:.5f}")
@@ -418,26 +489,36 @@ def plan_days(input_path, hotel_text, min_miles, days=None, lock=None,
                         log=log)
     link_hotel(graph, hotel, log=log)
 
+    # Size the plan in shift-hours: collection time is known, transfers are
+    # assumed to take the rest of each day (~40%); the true cap is enforced
+    # on the solved routes below.
+    total_survey_h = sum(c["time_s"] for c in chains) / 3600
     total_survey_mi = sum(s["length_m"] for s in todo) * MILES_PER_M
+    max_days = days or 5
     if days is None:
-        days = max(1, min(5, round(total_survey_mi / min_miles)))
-        while days > 1 and total_survey_mi / days < min_miles * 0.6:
-            days -= 1
-    log(f"\n[4/5] Planning {days} day(s) for {total_survey_mi:.0f} mi of "
-        f"collection (min {min_miles:.0f} mi/day)...")
+        days = max(1, min(max_days,
+                          ceil(total_survey_h / (max_hours * COLLECTION_SHARE))))
+    log(f"\n[4/5] Planning {days} day(s): {total_survey_mi:.0f} mi "
+        f"(~{total_survey_h:.1f} h) of collection, "
+        f"{max_hours:.1f} h driving per shift...")
 
     groups = sweep_partition(chains, hotel, days)
     solved = [solve_day(graph, chains, g, hotel) for g in groups]
     groups, solved = rebalance(graph, chains, groups, solved, hotel, log)
 
-    # If a day still can't reach the minimum, use fewer days.
-    while (len(solved) > 1
-           and min(day_total_mi(d) for d in solved) < min_miles):
-        days = len(solved) - 1
-        log(f"  A day fell under the {min_miles:.0f} mi minimum - "
+    # If the days run over the shift and we may add another day, do that
+    # first (keeps everything planned); only then trim to the cap.
+    while (days < max_days
+           and max(day_hours(d) for d in solved) > max_hours):
+        days += 1
+        log(f"  Days exceed the {max_hours:.1f} h shift - "
             f"replanning with {days} day(s)")
         groups = sweep_partition(chains, hotel, days)
         solved = [solve_day(graph, chains, g, hotel) for g in groups]
+        groups, solved = rebalance(graph, chains, groups, solved, hotel, log)
+
+    filler = trim_to_shift(graph, chains, groups, solved, hotel, max_hours, log)
+    if filler:
         groups, solved = rebalance(graph, chains, groups, solved, hotel, log)
 
     jumps = sum(d["total"]["jumps"] for d in solved)
@@ -445,7 +526,13 @@ def plan_days(input_path, hotel_text, min_miles, days=None, lock=None,
         log(f"  WARNING: {jumps} transfers had no road connection at all; "
             f"straight-line jumps were used (run with OSM enabled).")
 
-    print_plan(solved, min_miles, log=log)
+    filler_chains = [chains[ci] for ci in filler]
+    filler_info = ""
+    if filler:
+        filler_mi = sum(c["length_m"] for c in filler_chains) * MILES_PER_M
+        n_seg = sum(len(c["parts"]) for c in filler_chains)
+        filler_info = f"{n_seg} segments, {filler_mi:.0f} mi near the hotel"
+    print_plan(solved, max_hours, min_miles, filler_info, log=log)
 
     log("\n[5/5] Writing outputs...")
     os.makedirs(out_dir, exist_ok=True)
@@ -466,7 +553,7 @@ def plan_days(input_path, hotel_text, min_miles, days=None, lock=None,
         log(f"  Route {n}: {mpz} + {gpx}")
 
     overview = os.path.join(out_dir, "plan_overview.html")
-    write_plan_html(solved, hotel, unavailable, overview)
+    write_plan_html(solved, hotel, unavailable, filler_chains, overview)
     log(f"  Map: {overview}")
 
     plan_file = os.path.join(out_dir, "plan_segments.mpz")
@@ -487,13 +574,12 @@ def plan_days(input_path, hotel_text, min_miles, days=None, lock=None,
         for chain in solved[lock - 1]["chains"]:
             for section, _ in chain["parts"]:
                 section["scheduled"] = True
-        remaining_of = {sid: d for sid, d in day_of.items()}
         remaining = os.path.join(out_dir, "remaining_segments.mpz")
         write_segments_mpz(sections, remaining, "Remaining segments",
-                           day_of=remaining_of)
+                           day_of=day_of)
         log(f"\n  Route {lock} locked in. Drive {os.path.join(out_dir, f'day_{lock}.mpz')}")
         log(f"  Tomorrow: python Daily_Planner.py {remaining} "
-            f"--hotel ... --min-miles {min_miles:.0f}")
+            f"--hotel ... --hours {max_hours:g}")
 
     return solved
 
@@ -501,15 +587,21 @@ def plan_days(input_path, hotel_text, min_miles, days=None, lock=None,
 def main():
     parser = argparse.ArgumentParser(
         description="Plan balanced daily collection loops from a hotel over "
-                    "the remaining segments of a KML or Map Plus (.mpz) file.")
+                    "the remaining segments of a KML or Map Plus (.mpz) "
+                    "file. Days are sized and capped by driving time so "
+                    "every route is back at the hotel before the shift ends.")
     parser.add_argument("segments", help="KML or .mpz file with the segments")
     parser.add_argument("--hotel", required=True, metavar="ADDR_OR_LATLON",
                         help='hotel: street address or "LAT,LON"')
-    parser.add_argument("--min-miles", type=float, required=True,
-                        help="minimum total miles each daily route must reach")
+    parser.add_argument("--hours", type=float, default=6.0,
+                        help="max driving hours per day (default 6.0 - "
+                             "leaves wiggle room in an 8 h shift)")
+    parser.add_argument("--min-miles", type=float, default=None,
+                        help="optional: flag any route under this many total "
+                             "miles (balance itself is driven by --hours)")
     parser.add_argument("--days", type=int,
                         help="number of routes to build (default: sized from "
-                             "--min-miles, capped at 5)")
+                             "--hours, capped at 5)")
     parser.add_argument("--lock", type=int, metavar="N",
                         help="lock in route N non-interactively and write "
                              "remaining_segments.mpz")
@@ -520,8 +612,9 @@ def main():
                              "roads; not recommended)")
     args = parser.parse_args()
 
-    plan_days(args.segments, args.hotel, args.min_miles, days=args.days,
-              lock=args.lock, out_dir=args.out_dir, use_osm=not args.no_osm)
+    plan_days(args.segments, args.hotel, max_hours=args.hours,
+              min_miles=args.min_miles, days=args.days, lock=args.lock,
+              out_dir=args.out_dir, use_osm=not args.no_osm)
 
 
 if __name__ == "__main__":
