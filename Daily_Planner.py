@@ -469,7 +469,7 @@ if (bounds) map.fitBounds(bounds.pad(0.05));
 # ============================================================================
 
 def plan_days(input_path, hotel_text, max_hours=6.0, min_miles=None,
-              days=None, lock=None, out_dir="daily_plan", use_osm=True,
+              days=None, out_dir="daily_plan", use_osm=True,
               collect_mph=COLLECT_MPH, transfer_mph=TRANSFER_MPH,
               cache_dir=OVERPASS_CACHE_DIR, log=print):
     pace = (collect_mph, transfer_mph)
@@ -591,28 +591,38 @@ def plan_days(input_path, hotel_text, max_hours=6.0, min_miles=None,
     write_segments_mpz(sections, plan_file, "Multi-day plan", day_of=day_of)
     log(f"  Plan state: {plan_file} (every segment tagged with its day)")
 
-    # --- Lock in a day ------------------------------------------------------
-    if lock is None and sys.stdin.isatty():
-        try:
-            answer = input(f"\nLock in a route to drive (1-{len(solved)}), "
-                           f"or Enter to skip: ").strip()
-            lock = int(answer) if answer else None
-        except (ValueError, EOFError):
-            lock = None
-    if lock is not None:
-        if not 1 <= lock <= len(solved):
-            raise ValueError(f"--lock must be between 1 and {len(solved)}")
-        for chain in solved[lock - 1]["chains"]:
-            for section, _ in chain["parts"]:
-                section["scheduled"] = True
-        remaining = os.path.join(out_dir, "remaining_segments.mpz")
-        write_segments_mpz(sections, remaining, "Remaining segments",
-                           day_of=day_of)
-        log(f"\n  Route {lock} locked in. Drive {os.path.join(out_dir, f'day_{lock}.mpz')}")
-        log(f"  Tomorrow: python Daily_Planner.py {remaining} "
-            f"--hotel ... --hours {max_hours:g}")
+    return {
+        "solved": solved,
+        "sections": sections,
+        "day_of": day_of,
+        "out_dir": out_dir,
+        "overview": overview,
+        "plan_file": plan_file,
+        "max_hours": max_hours,
+        "filler_info": filler_info,
+    }
 
-    return solved
+
+def lock_route(plan, n, log=print):
+    """Lock in route `n` of a plan: write remaining_segments.mpz.
+
+    The locked route's segments are marked Scheduled=Yes so a re-run of the
+    planner on the remaining file plans only what is left.
+    """
+    solved = plan["solved"]
+    if not 1 <= n <= len(solved):
+        raise ValueError(f"Route number must be between 1 and {len(solved)}")
+    for chain in solved[n - 1]["chains"]:
+        for section, _ in chain["parts"]:
+            section["scheduled"] = True
+    remaining = os.path.join(plan["out_dir"], "remaining_segments.mpz")
+    write_segments_mpz(plan["sections"], remaining, "Remaining segments",
+                       day_of=plan["day_of"])
+    log(f"\n  Route {n} locked in. Drive "
+        f"{os.path.join(plan['out_dir'], f'day_{n}.mpz')}")
+    log(f"  Tomorrow: python Daily_Planner.py {remaining} "
+        f"--hotel ... --hours {plan['max_hours']:g}")
+    return remaining
 
 
 def main():
@@ -650,10 +660,22 @@ def main():
                              "roads; not recommended)")
     args = parser.parse_args()
 
-    plan_days(args.segments, args.hotel, max_hours=args.hours,
-              min_miles=args.min_miles, days=args.days, lock=args.lock,
-              out_dir=args.out_dir, use_osm=not args.no_osm,
-              collect_mph=args.collect_mph, transfer_mph=args.transfer_mph)
+    plan = plan_days(args.segments, args.hotel, max_hours=args.hours,
+                     min_miles=args.min_miles, days=args.days,
+                     out_dir=args.out_dir, use_osm=not args.no_osm,
+                     collect_mph=args.collect_mph,
+                     transfer_mph=args.transfer_mph)
+
+    lock = args.lock
+    if lock is None and sys.stdin.isatty():
+        try:
+            answer = input(f"\nLock in a route to drive "
+                           f"(1-{len(plan['solved'])}), or Enter to skip: ").strip()
+            lock = int(answer) if answer else None
+        except (ValueError, EOFError):
+            lock = None
+    if lock is not None:
+        lock_route(plan, lock)
 
 
 if __name__ == "__main__":

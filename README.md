@@ -25,11 +25,17 @@ pip install -r requirements.txt   # requests (OSM data; needed unless --no-osm) 
 ## Usage
 
 ```bash
-python Route_Planner.py                     # GUI
+python Route_Planner.py                     # GUI (both tools)
 python Route_Planner.py sections.kml       # headless CLI
 python Route_Planner.py region.mpz         # Map Plus project input
 python Route_Planner.py sections.kml --no-osm --gpx out.gpx --mpz out.mpz --start 40.44,-79.99
 ```
+
+The GUI covers both tools in one dark, modern window: a **Single route**
+tab and a **Daily plan from hotel** tab with hotel address input (street
+address or LAT,LON), shift hours, day count, drag-and-drop file loading, a
+live log, and a one-click **Lock in route** button that writes
+`remaining_segments.mpz` for tomorrow.
 
 Try it: `python Route_Planner.py sample.kml --no-osm`
 

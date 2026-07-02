@@ -1618,190 +1618,423 @@ def plan_route(input_path, use_osm=True, start=None, output_gpx="survey_route.gp
 # GUI (PyQt6, optional)
 # ============================================================================
 
+GUI_STYLE = """
+* { font-family: 'Segoe UI', 'SF Pro Text', 'Ubuntu', sans-serif; font-size: 13px; }
+QMainWindow, QWidget { background: #0e1320; color: #dbe4f0; }
+QFrame#card { background: #161d2e; border: 1px solid #232d44; border-radius: 12px; }
+QLabel { background: transparent; }
+QLabel#title { font-size: 21px; font-weight: 700; color: #f5f8fc; }
+QLabel#subtitle { color: #8b98ad; font-size: 12px; }
+QLabel#section { color: #8b98ad; font-size: 11px; font-weight: 700;
+                 letter-spacing: 1px; }
+QLabel#status { color: #8b98ad; font-size: 13px; }
+QLabel#status[state="ok"] { color: #4ade80; font-weight: 600; }
+QLabel#status[state="err"] { color: #f87171; font-weight: 600; }
+QLineEdit, QDoubleSpinBox, QSpinBox {
+  background: #0b0f1a; border: 1px solid #26314a;
+  border-radius: 8px; padding: 8px 10px; color: #e8eef7;
+  selection-background-color: #2f6fe0; }
+QLineEdit:focus, QDoubleSpinBox:focus, QSpinBox:focus { border: 1px solid #3b82f6; }
+QLineEdit:disabled, QSpinBox:disabled { color: #55617a; }
+QSpinBox::up-button, QSpinBox::down-button,
+QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {
+  background: #1d2739; width: 18px; border: none; }
+QPushButton { background: #222d45; color: #dbe4f0; border: none;
+              border-radius: 8px; padding: 9px 16px; }
+QPushButton:hover { background: #2b3854; }
+QPushButton:pressed { background: #1b2438; }
+QPushButton:disabled { background: #161d2e; color: #55617a; }
+QPushButton#primary { background: #2f6fe0; color: #ffffff; font-weight: 600;
+                      font-size: 14px; padding: 12px; }
+QPushButton#primary:hover { background: #3d7cf0; }
+QPushButton#primary:disabled { background: #1e2c49; color: #55617a; }
+QTabWidget::pane { border: none; background: transparent; }
+QTabBar::tab { background: transparent; color: #8b98ad; padding: 9px 20px;
+               border: none; border-bottom: 2px solid transparent;
+               font-weight: 600; }
+QTabBar::tab:selected { color: #f5f8fc; border-bottom: 2px solid #3b82f6; }
+QTabBar::tab:hover:!selected { color: #c4cede; }
+QCheckBox { spacing: 8px; color: #aeb9cc; }
+QCheckBox::indicator { width: 17px; height: 17px; border-radius: 5px;
+                       background: #0b0f1a; border: 1px solid #2b3854; }
+QCheckBox::indicator:checked { background: #2f6fe0; border-color: #2f6fe0;
+  image: none; }
+QProgressBar { background: #0b0f1a; border: none; border-radius: 4px;
+               max-height: 8px; }
+QProgressBar::chunk { background: #3b82f6; border-radius: 4px; }
+QTextEdit { background: #0a0e18; border: 1px solid #1c2537; border-radius: 10px;
+            color: #9bd4ae; padding: 8px;
+            font-family: 'Cascadia Mono', 'Consolas', 'DejaVu Sans Mono', monospace;
+            font-size: 12px; }
+QScrollBar:vertical { background: transparent; width: 10px; }
+QScrollBar::handle:vertical { background: #2b3854; border-radius: 5px;
+                              min-height: 24px; }
+QScrollBar::add-line, QScrollBar::sub-line { height: 0; }
+QMessageBox { background: #161d2e; }
+"""
+
+
 def run_gui():
     from PyQt6.QtCore import Qt, QThread, pyqtSignal
     from PyQt6.QtGui import QTextCursor
     from PyQt6.QtWidgets import (
-        QApplication, QCheckBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
-        QMainWindow, QMessageBox, QProgressBar, QPushButton, QTextEdit,
+        QApplication, QCheckBox, QDoubleSpinBox, QFileDialog, QFrame,
+        QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox,
+        QProgressBar, QPushButton, QSpinBox, QTabWidget, QTextEdit,
         QVBoxLayout, QWidget,
     )
 
     class Worker(QThread):
         message = pyqtSignal(str)
-        stepped = pyqtSignal(int)
-        solved = pyqtSignal(int, int)
-        done = pyqtSignal(dict)
+        done = pyqtSignal(object)
         failed = pyqtSignal(str)
 
-        def __init__(self, params):
+        def __init__(self, task, params):
             super().__init__()
+            self.task = task
             self.params = params
 
         def run(self):
             try:
-                results = plan_route(
-                    self.params["input"],
-                    use_osm=self.params["use_osm"],
-                    output_gpx=self.params["gpx"],
-                    output_html=self.params["html"],
-                    output_mpz=self.params["mpz"],
-                    log=self.message.emit,
-                    step=self.stepped.emit,
-                    progress=self.solved.emit,
-                )
-                self.done.emit(results)
+                p = self.params
+                if self.task == "route":
+                    result = plan_route(
+                        p["input"], use_osm=p["use_osm"], output_gpx=p["gpx"],
+                        output_html=p["html"], output_mpz=p["mpz"],
+                        log=self.message.emit)
+                else:
+                    from Daily_Planner import plan_days
+                    result = plan_days(
+                        p["input"], p["hotel"], max_hours=p["hours"],
+                        days=p["days"], out_dir=p["out_dir"],
+                        use_osm=p["use_osm"], log=self.message.emit)
+                self.done.emit(result)
             except Exception as e:
                 import traceback
                 self.failed.emit(f"{e}\n\n{traceback.format_exc()}")
+
+    def card():
+        frame = QFrame()
+        frame.setObjectName("card")
+        inner = QVBoxLayout(frame)
+        inner.setContentsMargins(16, 14, 16, 14)
+        inner.setSpacing(10)
+        return frame, inner
+
+    def section_label(text):
+        lbl = QLabel(text.upper())
+        lbl.setObjectName("section")
+        return lbl
 
     class Window(QMainWindow):
         def __init__(self):
             super().__init__()
             self.worker = None
-            self.results = None
+            self.route_results = None
+            self.plan = None
             self.setWindowTitle("Survey Route Planner")
-            self.resize(760, 640)
+            self.resize(860, 780)
+            self.setAcceptDrops(True)
 
             root = QWidget()
             self.setCentralWidget(root)
             layout = QVBoxLayout(root)
-            layout.setSpacing(10)
-            layout.setContentsMargins(16, 16, 16, 16)
+            layout.setSpacing(12)
+            layout.setContentsMargins(20, 18, 20, 18)
 
-            row = QHBoxLayout()
-            self.kml_edit = QLineEdit()
-            self.kml_edit.setPlaceholderText(
-                "Select the KML or Map Plus (.mpz) file with your road sections...")
+            # --- Header ---------------------------------------------------
+            title = QLabel("Survey Route Planner")
+            title.setObjectName("title")
+            subtitle = QLabel("Directional collection routing  ·  blue = drive "
+                              "with the arrows  ·  pink = drive against them")
+            subtitle.setObjectName("subtitle")
+            layout.addWidget(title)
+            layout.addWidget(subtitle)
+
+            # --- Input card -----------------------------------------------
+            in_card, in_lay = card()
+            in_lay.addWidget(section_label("Segments file"))
+            file_row = QHBoxLayout()
+            self.input_edit = QLineEdit()
+            self.input_edit.setPlaceholderText(
+                "KML or Map Plus (.mpz) file — or drop it anywhere on this window")
             browse = QPushButton("Browse…")
             browse.clicked.connect(self.browse)
-            row.addWidget(QLabel("Input:"))
-            row.addWidget(self.kml_edit, 1)
-            row.addWidget(browse)
-            layout.addLayout(row)
+            file_row.addWidget(self.input_edit, 1)
+            file_row.addWidget(browse)
+            in_lay.addLayout(file_row)
+            layout.addWidget(in_card)
 
-            out_row = QHBoxLayout()
+            # --- Mode card ------------------------------------------------
+            mode_card, mode_lay = card()
+            self.tabs = QTabWidget()
+
+            # Single-route tab
+            route_tab = QWidget()
+            route_grid = QGridLayout(route_tab)
+            route_grid.setContentsMargins(4, 12, 4, 4)
+            route_grid.setHorizontalSpacing(10)
+            route_grid.setVerticalSpacing(10)
             self.gpx_edit = QLineEdit("survey_route.gpx")
             self.html_edit = QLineEdit("route_preview.html")
             self.mpz_edit = QLineEdit("survey_route.mpz")
-            out_row.addWidget(QLabel("GPX:"))
-            out_row.addWidget(self.gpx_edit, 1)
-            out_row.addWidget(QLabel("Map:"))
-            out_row.addWidget(self.html_edit, 1)
-            out_row.addWidget(QLabel("MPZ:"))
-            out_row.addWidget(self.mpz_edit, 1)
-            layout.addLayout(out_row)
+            for col, (name, edit) in enumerate(
+                    [("GPX track", self.gpx_edit), ("Map preview", self.html_edit),
+                     ("Map Plus project", self.mpz_edit)]):
+                route_grid.addWidget(section_label(name), 0, col)
+                route_grid.addWidget(edit, 1, col)
+            hint = QLabel("One continuous route over every remaining segment, "
+                          "in collection order.")
+            hint.setObjectName("subtitle")
+            route_grid.addWidget(hint, 2, 0, 1, 3)
+            route_grid.setRowStretch(3, 1)
+            self.tabs.addTab(route_tab, "Single route")
 
+            # Daily-plan tab
+            daily_tab = QWidget()
+            daily_grid = QGridLayout(daily_tab)
+            daily_grid.setContentsMargins(4, 12, 4, 4)
+            daily_grid.setHorizontalSpacing(10)
+            daily_grid.setVerticalSpacing(10)
+            daily_grid.addWidget(section_label("Hotel address"), 0, 0, 1, 2)
+            self.hotel_edit = QLineEdit()
+            self.hotel_edit.setPlaceholderText(
+                'Street address (e.g. "8051 Peach St, Erie PA") or LAT,LON')
+            daily_grid.addWidget(self.hotel_edit, 1, 0, 1, 2)
+            daily_grid.addWidget(section_label("Driving hours per shift"), 2, 0)
+            self.hours_spin = QDoubleSpinBox()
+            self.hours_spin.setRange(1.0, 12.0)
+            self.hours_spin.setSingleStep(0.5)
+            self.hours_spin.setValue(6.0)
+            self.hours_spin.setSuffix(" h")
+            daily_grid.addWidget(self.hours_spin, 3, 0)
+            daily_grid.addWidget(section_label("Days"), 2, 1)
+            self.days_spin = QSpinBox()
+            self.days_spin.setRange(0, 5)
+            self.days_spin.setValue(0)
+            self.days_spin.setSpecialValueText("Auto")
+            daily_grid.addWidget(self.days_spin, 3, 1)
+            daily_grid.addWidget(section_label("Output folder"), 4, 0, 1, 2)
+            self.outdir_edit = QLineEdit("daily_plan")
+            daily_grid.addWidget(self.outdir_edit, 5, 0, 1, 2)
+            hint2 = QLabel("Balanced hotel-to-hotel loops that fit your shift. "
+                           "Every route ends back at the hotel before the "
+                           "shift is over.")
+            hint2.setObjectName("subtitle")
+            daily_grid.addWidget(hint2, 6, 0, 1, 2)
+            daily_grid.setRowStretch(7, 1)
+            self.tabs.addTab(daily_tab, "Daily plan from hotel")
+            self.tabs.currentChanged.connect(self.on_tab_changed)
+
+            mode_lay.addWidget(self.tabs)
             self.osm_check = QCheckBox(
-                "Use OpenStreetMap for connecting roads and speed limits (recommended)")
+                "Use OpenStreetMap road network — keeps every transfer on "
+                "real roads (recommended)")
             self.osm_check.setChecked(True)
-            layout.addWidget(self.osm_check)
+            mode_lay.addWidget(self.osm_check)
+            layout.addWidget(mode_card)
 
+            # --- Run + progress -------------------------------------------
             self.run_btn = QPushButton("Plan Route")
-            self.run_btn.setStyleSheet("font-weight: bold; padding: 10px;")
+            self.run_btn.setObjectName("primary")
             self.run_btn.clicked.connect(self.start)
             layout.addWidget(self.run_btn)
 
             self.bar = QProgressBar()
-            self.bar.setRange(0, 5)
-            self.bar.setFormat("Step %v / %m")
+            self.bar.setTextVisible(False)
+            self.bar.setVisible(False)
             layout.addWidget(self.bar)
 
-            self.solve_bar = QProgressBar()
-            self.solve_bar.setFormat("Routing run %v / %m")
-            self.solve_bar.setVisible(False)
-            layout.addWidget(self.solve_bar)
+            self.status = QLabel("Ready.")
+            self.status.setObjectName("status")
+            layout.addWidget(self.status)
 
+            # --- Log ------------------------------------------------------
             self.log_box = QTextEdit()
             self.log_box.setReadOnly(True)
-            self.log_box.setStyleSheet(
-                "background:#111; color:#8f8; font-family:monospace; font-size:11px;")
             layout.addWidget(self.log_box, 1)
 
-            btns = QHBoxLayout()
-            self.gpx_btn = QPushButton("Open GPX Folder")
-            self.map_btn = QPushButton("View Map")
-            self.gpx_btn.setEnabled(False)
+            # --- Actions --------------------------------------------------
+            actions = QHBoxLayout()
+            self.map_btn = QPushButton("Open Map")
+            self.folder_btn = QPushButton("Open Output Folder")
             self.map_btn.setEnabled(False)
-            self.gpx_btn.clicked.connect(self.open_gpx_folder)
+            self.folder_btn.setEnabled(False)
             self.map_btn.clicked.connect(self.open_map)
-            btns.addWidget(self.gpx_btn)
-            btns.addWidget(self.map_btn)
-            layout.addLayout(btns)
+            self.folder_btn.clicked.connect(self.open_folder)
+            actions.addWidget(self.map_btn)
+            actions.addWidget(self.folder_btn)
+            actions.addStretch(1)
+            self.lock_label = QLabel("Lock in route")
+            self.lock_spin = QSpinBox()
+            self.lock_spin.setRange(1, 1)
+            self.lock_btn = QPushButton("Lock ✓  (write remaining file)")
+            self.lock_btn.clicked.connect(self.lock_in)
+            for w in (self.lock_label, self.lock_spin, self.lock_btn):
+                w.setVisible(False)
+                actions.addWidget(w)
+            layout.addLayout(actions)
+
+        # --- Drag & drop --------------------------------------------------
+        def dragEnterEvent(self, event):
+            urls = event.mimeData().urls()
+            if urls and urls[0].toLocalFile().lower().endswith((".kml", ".mpz")):
+                event.acceptProposedAction()
+
+        def dropEvent(self, event):
+            self.input_edit.setText(event.mimeData().urls()[0].toLocalFile())
+
+        # --- Helpers --------------------------------------------------------
+        def daily_mode(self):
+            return self.tabs.currentIndex() == 1
+
+        def on_tab_changed(self, _):
+            self.run_btn.setText("Plan My Days" if self.daily_mode()
+                                 else "Plan Route")
 
         def browse(self):
             path, _ = QFileDialog.getOpenFileName(
-                self, "Select Input File", "",
+                self, "Select Segments File", "",
                 "Map data (*.kml *.mpz);;KML Files (*.kml);;"
                 "Map Plus Projects (*.mpz);;All Files (*)")
             if path:
-                self.kml_edit.setText(path)
+                self.input_edit.setText(path)
 
         def log(self, msg):
             self.log_box.append(msg)
             self.log_box.moveCursor(QTextCursor.MoveOperation.End)
 
+        def set_status(self, text, state=""):
+            self.status.setText(text)
+            self.status.setProperty("state", state)
+            self.status.style().unpolish(self.status)
+            self.status.style().polish(self.status)
+
+        def set_running(self, running):
+            self.run_btn.setEnabled(not running)
+            self.bar.setVisible(running)
+            self.bar.setRange(0, 0)  # busy indicator
+            if running:
+                self.map_btn.setEnabled(False)
+                self.folder_btn.setEnabled(False)
+                for w in (self.lock_label, self.lock_spin, self.lock_btn):
+                    w.setVisible(False)
+
+        # --- Run ------------------------------------------------------------
         def start(self):
-            path = self.kml_edit.text().strip()
+            path = self.input_edit.text().strip()
             if not path or not os.path.exists(path):
                 QMessageBox.warning(self, "No input",
                                     "Please select an existing KML or .mpz file.")
                 return
-            self.run_btn.setEnabled(False)
-            self.gpx_btn.setEnabled(False)
-            self.map_btn.setEnabled(False)
+            if self.daily_mode():
+                hotel = self.hotel_edit.text().strip()
+                if not hotel:
+                    QMessageBox.warning(
+                        self, "No hotel",
+                        "Enter the hotel address (or LAT,LON) so every route "
+                        "can start and end there.")
+                    return
+                task, params = "days", {
+                    "input": path,
+                    "hotel": hotel,
+                    "hours": self.hours_spin.value(),
+                    "days": self.days_spin.value() or None,
+                    "out_dir": self.outdir_edit.text().strip() or "daily_plan",
+                    "use_osm": self.osm_check.isChecked(),
+                }
+            else:
+                task, params = "route", {
+                    "input": path,
+                    "use_osm": self.osm_check.isChecked(),
+                    "gpx": self.gpx_edit.text().strip() or "survey_route.gpx",
+                    "html": self.html_edit.text().strip() or "route_preview.html",
+                    "mpz": self.mpz_edit.text().strip() or "survey_route.mpz",
+                }
             self.log_box.clear()
-            self.bar.setValue(0)
-            self.solve_bar.setVisible(False)
-            self.worker = Worker({
-                "input": path,
-                "use_osm": self.osm_check.isChecked(),
-                "gpx": self.gpx_edit.text().strip() or "survey_route.gpx",
-                "html": self.html_edit.text().strip() or "route_preview.html",
-                "mpz": self.mpz_edit.text().strip() or "survey_route.mpz",
-            })
+            self.set_running(True)
+            self.set_status("Planning… the first run downloads the road "
+                            "network and can take a while; it is cached after.")
+            self.worker = Worker(task, params)
             self.worker.message.connect(self.log)
-            self.worker.stepped.connect(self.bar.setValue)
-            self.worker.solved.connect(self.on_solve_progress)
-            self.worker.done.connect(self.on_done)
+            self.worker.done.connect(self.on_done_days if task == "days"
+                                     else self.on_done_route)
             self.worker.failed.connect(self.on_failed)
             self.worker.start()
 
-        def on_solve_progress(self, current, total_runs):
-            self.solve_bar.setVisible(True)
-            self.solve_bar.setRange(0, total_runs)
-            self.solve_bar.setValue(current)
-
-        def on_done(self, results):
-            self.results = results
-            self.run_btn.setEnabled(True)
-            self.gpx_btn.setEnabled(True)
+        def on_done_route(self, results):
+            self.route_results = results
+            self.plan = None
+            self.set_running(False)
+            self.bar.setVisible(False)
             self.map_btn.setEnabled(True)
-            self.bar.setValue(5)
-            msg = (f"Total: {results['total_m'] / 1000:.1f} km "
-                   f"(deadhead {results['deadhead_m'] / 1000:.1f} km)\n"
-                   f"Estimated driving time: {results['total_s'] / 3600:.1f} h\n"
-                   f"{results['sections']} sections in {results['runs']} continuous runs")
+            self.folder_btn.setEnabled(True)
+            mi = results["total_m"] / 1609.344
+            summary = (f"Route ready — {mi:.0f} mi, "
+                       f"{results['sections']} segments in "
+                       f"{results['runs']} runs")
             if results.get("collected"):
-                msg += f"\n{results['collected']} segments already collected (skipped)"
-            QMessageBox.information(self, "Route ready", msg)
+                summary += f", {results['collected']} already collected"
+            self.set_status("✓ " + summary, "ok")
+
+        def on_done_days(self, plan):
+            self.plan = plan
+            self.route_results = None
+            self.set_running(False)
+            self.bar.setVisible(False)
+            self.map_btn.setEnabled(True)
+            self.folder_btn.setEnabled(True)
+            n = len(plan["solved"])
+            self.lock_spin.setRange(1, n)
+            for w in (self.lock_label, self.lock_spin, self.lock_btn):
+                w.setVisible(True)
+            self.set_status(f"✓ {n}-day plan ready — preview the map, then "
+                            f"lock in the route you'll drive", "ok")
 
         def on_failed(self, msg):
-            self.run_btn.setEnabled(True)
+            self.set_running(False)
+            self.bar.setVisible(False)
             self.log(f"\nERROR: {msg}")
+            self.set_status("✗ " + msg.splitlines()[0][:120], "err")
             QMessageBox.critical(self, "Error", msg[:800])
 
-        def open_gpx_folder(self):
-            if self.results:
-                folder = os.path.dirname(os.path.abspath(self.results["gpx"])) or "."
-                webbrowser.open("file://" + folder)
+        def lock_in(self):
+            if not self.plan:
+                return
+            from Daily_Planner import lock_route
+            try:
+                remaining = lock_route(self.plan, self.lock_spin.value(),
+                                       log=self.log)
+            except Exception as e:
+                QMessageBox.critical(self, "Error", str(e))
+                return
+            self.set_status(f"✓ Route {self.lock_spin.value()} locked — "
+                            f"re-run on {os.path.basename(remaining)} "
+                            f"tomorrow", "ok")
 
+        # --- Open results ---------------------------------------------------
         def open_map(self):
-            if self.results:
-                webbrowser.open("file://" + os.path.abspath(self.results["html"]))
+            target = None
+            if self.plan:
+                target = self.plan["overview"]
+            elif self.route_results:
+                target = self.route_results["html"]
+            if target:
+                webbrowser.open("file://" + os.path.abspath(target))
+
+        def open_folder(self):
+            if self.plan:
+                folder = os.path.abspath(self.plan["out_dir"])
+            elif self.route_results:
+                folder = os.path.dirname(
+                    os.path.abspath(self.route_results["gpx"])) or "."
+            else:
+                return
+            webbrowser.open("file://" + folder)
 
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+    app.setStyleSheet(GUI_STYLE)
     win = Window()
     win.show()
     sys.exit(app.exec())
