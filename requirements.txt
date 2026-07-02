@@ -1,0 +1,3 @@
+# Both optional — the planner runs headless and offline without them.
+requests>=2.25.0   # OpenStreetMap (Overpass) fetch for deadhead roads + speed limits
+PyQt6>=6.4.0       # GUI
