@@ -8,6 +8,12 @@ field workflow. Segments already marked `Collected = Yes` in the input are
 left out of the route and carried through faded, so re-uploading a partially
 collected project plans only what's left.
 
+Two programs:
+
+- **`Route_Planner.py`** — one continuous route over everything remaining.
+- **`Daily_Planner.py`** — a balanced multi-day plan of hotel-to-hotel loops
+  (see [Daily planner](#daily-planner-hotel-loops) below).
+
 Everything lives in one file: `Route_Planner.py`.
 
 ## Install
@@ -92,6 +98,51 @@ Field workflow:
   Yes` keep their faded look as `✓ <CollId>` features, and a fresh route is
   planned over only the remaining segments — their roads are still used for
   transfers where helpful.
+
+## Daily planner (hotel loops)
+
+`Daily_Planner.py` turns the remaining segments into **3–5 balanced daily
+routes** that each start and end at your hotel and meet a minimum mileage:
+
+```bash
+python Daily_Planner.py segments.mpz --hotel "8051 Peach St, Erie PA" --min-miles 120
+python Daily_Planner.py segments.mpz --hotel 42.05,-80.08 --min-miles 120 --days 4
+python Daily_Planner.py segments.mpz --hotel 42.05,-80.08 --min-miles 120 --lock 1
+```
+
+How it balances the days:
+
+1. Continuous runs are swept by compass bearing around the hotel into one
+   wedge per day, each holding about the same collection mileage. Wedges
+   keep every day's work in one compact area, so finishing a day never
+   strands isolated segments in another day's territory — what remains is
+   still clustered for tomorrow.
+2. Each day is solved as a real road route (same engine as
+   `Route_Planner.py`: OSM network, blue/pink directions, transfers on
+   roads) from the hotel through its wedge and back.
+3. Days are rebalanced on true driven miles: boundary runs shift from the
+   heaviest day into the neighboring lighter day until no day is
+   dramatically bigger than another — a run may leave its locally optimal
+   day if that keeps the whole week consistent.
+
+Every route is printed with total miles, collection vs deadhead split,
+estimated hours, and the segment collection order (`123I` = CollId 123 blue
+/ with the arrows, `456D` = pink / against them).
+
+Outputs (in `--out-dir`, default `daily_plan/`):
+
+- `day_N.mpz` / `day_N.gpx` — one complete hotel-to-hotel route per day.
+- `plan_overview.html` — all days on one map, one color per day, hotel
+  marked.
+- `plan_segments.mpz` — every segment tagged with its planned day
+  (`ScheduledDay`).
+- `remaining_segments.mpz` (with `--lock N` or the interactive prompt) —
+  route N's segments marked `Scheduled = Yes`.
+
+Daily workflow: preview the plan, lock in the route you'll drive
+(`--lock 1`), collect it, then re-run tomorrow on
+`remaining_segments.mpz` — or on a fresh Map Plus export with
+`Collected = Yes` set — and get a fresh balanced plan over what's left.
 
 ## Input format
 

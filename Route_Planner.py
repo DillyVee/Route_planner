@@ -221,6 +221,7 @@ def _build_section(coords, fields, name):
         "collid": fields.get("collid"),
         "dir_code": dir_code,
         "collected": (fields.get("collected") or "").strip().lower().startswith("y"),
+        "scheduled": (fields.get("scheduled") or "").strip().lower().startswith("y"),
         "fields": fields,
     }
 
@@ -1042,7 +1043,8 @@ MPZ_METADATA_XML = f"""<?xml version="1.0" encoding="UTF-8"?>
 
 # Property schema copied from the reference exports (name, value_type,
 # options); value_type 1=text, 11=integer, 13=decimal. RouteOrder and
-# NextCollId are added so each feature knows its place in the drive order.
+# NextCollId are added so each feature knows its place in the drive order;
+# Scheduled and ScheduledDay carry the daily planner's multi-day state.
 MPZ_PROPERTIES = [
     ("CollId", 11, None), ("RouteName", 1, None), ("Dir", 1, None),
     ("Collected", 1, "Yes|No|"), ("LengthFt", 13, None), ("Region", 11, None),
@@ -1050,6 +1052,7 @@ MPZ_PROPERTIES = [
     ("SegNo", 1, None), ("BegM", 13, None), ("EndM", 13, None),
     ("IsPilot", 1, None),
     ("RouteOrder", 11, None), ("NextCollId", 1, None),
+    ("Scheduled", 1, "Yes|No|"), ("ScheduledDay", 11, None),
 ]
 
 # Style constants lifted from the reference (color ints as decimal strings).
@@ -1167,7 +1170,159 @@ def _mpz_coords_blob(coords):
             + b"".join(struct.pack("<dd", lat, lon) for lat, lon in coords))
 
 
-def write_mpz(visits, total, filename, title="Survey Route", collected_sections=()):
+class _MpzProject:
+    """Scaffolding shared by every Map Plus project writer.
+
+    Creates the database in the reference schema with the feature class,
+    property definitions, conditional display rules, and one feature
+    collection; features are appended with add_feature() and close() zips
+    everything into the .mpz archive.
+    """
+
+    # Conditional display rules (type 2002), copied from the reference files:
+    # segments are pink by default (drive against the digitized arrows) and
+    # blue when Dir=I (drive with the arrows); pilot segments recolor; then
+    # deadhead transfers gray out and Scheduled / Collected segments fade.
+    CONDITIONS = [
+        ("Direction I", '[Dir]=="I"', {211: MPZ_COLOR_DIR_I}),
+        ("Pilot", '[IsPilot].beginswith("Y")', {211: MPZ_COLOR_PILOT}),
+        ("Pilot Direction I", '[Dir]=="I"&&[IsPilot].beginswith("Y")',
+         {211: MPZ_COLOR_DIR_I_PILOT}),
+        ("Deadhead", '[RouteName]=="Deadhead"',
+         {210: "2", 211: str(MPZ_DEADHEAD_LINE[0]), 212: "0.5"}),
+        ("Scheduled", '[Scheduled].beginswith("Y")',
+         {210: "2", 211: "1679834990", 212: "0.5", 234: "0"}),
+        ("Collected", '[Collected].beginswith("Y")',
+         {210: "2", 211: "1677721600", 212: "0.2972973", 220: "0", 234: "0"}),
+    ]
+
+    def __init__(self, filename, title, description=None):
+        self.filename = filename
+        self.now = time.time()
+        self._guid_base = uuid.uuid4().hex[:10].upper()
+        self._guid_n = 0
+        self.db_path = filename + ".sdb.tmp"
+        if os.path.exists(self.db_path):
+            os.remove(self.db_path)
+        self.con = sqlite3.connect(self.db_path)
+        for sql in MPZ_TABLE_SQL:
+            self.con.execute(sql)
+
+        # Feature class (type 2001) with its properties and display rules.
+        self.fc_id = 10001
+        today = datetime.now()
+        self.add_item(self.fc_id, 1, 1, 2001, title,
+                      description=f"{today:%b} {today.day}, {today.year}",
+                      icon_id=0, subtype=2)
+        self.add_styles(self.fc_id, MPZ_CLASS_STYLE)
+
+        self.prop = {}
+        for i, (pname, value_type, options) in enumerate(MPZ_PROPERTIES, start=1):
+            pid = 10000 + i
+            self.prop[pname.lower()] = pid
+            self.con.execute(
+                "INSERT INTO t_property(id, feature_class_id, order_idx, name, "
+                "type, value_type, options, insert_date, update_date) "
+                "VALUES(?,?,?,?,2,?,?,?,?)",
+                (pid, self.fc_id, i, pname, value_type, options,
+                 self.now, self.now))
+        # Template rows the reference carries on the feature-class item itself.
+        self.add_props(self.fc_id, [(2, None)] + [(pid, None) for pid in
+                                                  sorted(self.prop.values())])
+
+        for ci, (cname, rule, styles) in enumerate(self.CONDITIONS, start=1):
+            cond_id = self.fc_id + ci
+            self.add_item(cond_id, self.fc_id, ci, 2002, cname)
+            self.add_props(cond_id, [(600, rule)])
+            self.add_styles(cond_id, styles)
+
+        # Feature collection (type 70) that holds the features.
+        self.coll_id = self.fc_id + len(self.CONDITIONS) + 1
+        self.add_item(self.coll_id, 1, 2, 70, title, description=description,
+                      feature_class_id=self.fc_id, show_on_map=1,
+                      display_mode=0, subtype=2)
+        self.add_props(self.coll_id, [(700, struct.pack("<i", 0)),
+                                      (701, struct.pack("<i", 25)),
+                                      (702, struct.pack("<i", 0))])
+        self.item_id = self.coll_id
+        self.order_idx = 0
+
+    def _guid(self):
+        self._guid_n += 1
+        return f"RP{self._guid_base}L{self._guid_n}"
+
+    def add_item(self, item_id, parent_id, order_idx, item_type, name, **kw):
+        row = {"id": item_id, "guid": self._guid(), "parent_id": parent_id,
+               "order_idx": order_idx, "type": item_type, "name": name,
+               "remind_distance": 0, "insert_date": self.now,
+               "update_date": self.now}
+        row.update(kw)
+        cols = ", ".join(row)
+        self.con.execute(
+            f"INSERT INTO t_item({cols}) VALUES({', '.join('?' * len(row))})",
+            list(row.values()))
+
+    def add_props(self, item_id, values):
+        for pid, value in values:
+            blob = value.encode("utf-8") if isinstance(value, str) else value
+            self.con.execute(
+                "INSERT INTO t_property_lkp(item_id, property_id, value) "
+                "VALUES(?,?,?)", (item_id, pid, blob))
+
+    def add_styles(self, item_id, styles):
+        self.con.executemany(
+            "INSERT INTO t_feature_style_lkp(item_id, style, value) "
+            "VALUES(?,?,?)", [(item_id, k, v) for k, v in styles.items()])
+
+    def add_feature(self, name, coords, line, description=None, props=()):
+        self.item_id += 1
+        self.order_idx += 1
+        self.add_item(self.item_id, self.coll_id, self.order_idx, 3, name,
+                      description=description, feature_class_id=self.fc_id,
+                      display_mode=1)
+        self.con.execute(
+            "INSERT INTO t_shape(item_id, coordinates, coord_dimension, "
+            "coord_type, line_color, line_width, fill_color, zorder) "
+            "VALUES(?,?,1,0,?,?,?,0)",
+            (self.item_id, _mpz_coords_blob(coords),
+             line[0], line[1], line[2]))
+        self.add_props(self.item_id, props)
+
+    def field_props(self, section, exclude=()):
+        """Property rows carrying a section's original fields over."""
+        values = [(2, section["fields"].get("routename"))]
+        seen = set()
+        for fname, value in section["fields"].items():
+            pid = self.prop.get(fname)
+            if pid and fname not in exclude:
+                values.append((pid, value))
+                seen.add(fname)
+        return values, seen
+
+    def close(self):
+        self.con.executemany(
+            "INSERT INTO t_sequence(id, sequence) VALUES(?,?)",
+            [(1, self.item_id + 1), (2, 10001),
+             (3, 10001 + len(MPZ_PROPERTIES)), (4, 10001), (5, 10001),
+             (6, 10001)])
+        self.con.execute(
+            "INSERT INTO t_version(version, previous, update_date) "
+            "VALUES(?,?,?)", (MPZ_DB_VERSION, None, self.now))
+        self.con.execute(
+            "INSERT INTO t_metadata(name, value, update_date) VALUES(?,?,?)",
+            ("version", MPZ_DB_VERSION, self.now))
+        self.con.commit()
+        self.con.close()
+        with zipfile.ZipFile(self.filename, "w", zipfile.ZIP_DEFLATED) as z:
+            z.write(self.db_path, "data.sdb")
+            z.writestr(".com.miocool.mapplus.metadata/metadata.xml",
+                       MPZ_METADATA_XML)
+        os.remove(self.db_path)
+        return self.filename
+
+
+def write_mpz(visits, total, filename, title="Survey Route",
+              collected_sections=(), return_path=None):
     """Write the planned route as a Map Plus project archive (.mpz).
 
     Segments keep their original digitized geometry, so Map Plus draws the
@@ -1175,84 +1330,9 @@ def write_mpz(visits, total, filename, title="Survey Route", collected_sections=
     written to match the drive: I (blue, drive with the arrows) or D (pink,
     drive against them). Sections already collected in the input are included
     with Collected=Yes — they fade out and are not part of the route order.
+    `return_path` adds a final deadhead feature back to the start (for daily
+    loops that end where they began).
     """
-    now = time.time()
-    guid_base = uuid.uuid4().hex[:10].upper()
-    guid_n = 0
-
-    def guid():
-        nonlocal guid_n
-        guid_n += 1
-        return f"RP{guid_base}L{guid_n}"
-
-    db_path = filename + ".sdb.tmp"
-    if os.path.exists(db_path):
-        os.remove(db_path)
-    con = sqlite3.connect(db_path)
-    for sql in MPZ_TABLE_SQL:
-        con.execute(sql)
-
-    def add_item(item_id, parent_id, order_idx, item_type, name, **kw):
-        row = {"id": item_id, "guid": guid(), "parent_id": parent_id,
-               "order_idx": order_idx, "type": item_type, "name": name,
-               "remind_distance": 0, "insert_date": now, "update_date": now}
-        row.update(kw)
-        cols = ", ".join(row)
-        con.execute(f"INSERT INTO t_item({cols}) VALUES({', '.join('?' * len(row))})",
-                    list(row.values()))
-
-    def add_props(item_id, values):
-        for pid, value in values:
-            blob = value.encode("utf-8") if isinstance(value, str) else value
-            con.execute("INSERT INTO t_property_lkp(item_id, property_id, value) "
-                        "VALUES(?,?,?)", (item_id, pid, blob))
-
-    def add_styles(item_id, styles):
-        con.executemany("INSERT INTO t_feature_style_lkp(item_id, style, value) "
-                        "VALUES(?,?,?)", [(item_id, k, v) for k, v in styles.items()])
-
-    # --- Feature class (type 2001) with its properties and display rules ----
-    fc_id = 10001
-    today = datetime.now()
-    add_item(fc_id, 1, 1, 2001, title,
-             description=f"{today:%b} {today.day}, {today.year}",
-             icon_id=0, subtype=2)
-    add_styles(fc_id, MPZ_CLASS_STYLE)
-
-    prop_ids = {}
-    for i, (pname, value_type, options) in enumerate(MPZ_PROPERTIES, start=1):
-        pid = 10000 + i
-        prop_ids[pname.lower()] = pid
-        con.execute("INSERT INTO t_property(id, feature_class_id, order_idx, name, "
-                    "type, value_type, options, insert_date, update_date) "
-                    "VALUES(?,?,?,?,2,?,?,?,?)",
-                    (pid, fc_id, i, pname, value_type, options, now, now))
-    # Template rows the reference carries on the feature-class item itself.
-    add_props(fc_id, [(2, None)] + [(pid, None) for pid in
-                                    sorted(prop_ids.values())])
-
-    # Conditional display rules (type 2002), copied from the reference files:
-    # segments are pink by default (drive against the digitized arrows) and
-    # blue when Dir=I (drive with the arrows); pilot segments recolor; then
-    # deadhead transfers gray out and Collected=Yes segments fade.
-    conditions = [
-        ("Direction I", '[Dir]=="I"', {211: MPZ_COLOR_DIR_I}),
-        ("Pilot", '[IsPilot].beginswith("Y")', {211: MPZ_COLOR_PILOT}),
-        ("Pilot Direction I", '[Dir]=="I"&&[IsPilot].beginswith("Y")',
-         {211: MPZ_COLOR_DIR_I_PILOT}),
-        ("Deadhead", '[RouteName]=="Deadhead"',
-         {210: "2", 211: str(MPZ_DEADHEAD_LINE[0]), 212: "0.5"}),
-        ("Collected", '[Collected].beginswith("Y")',
-         {210: "2", 211: "1677721600", 212: "0.2972973", 220: "0", 234: "0"}),
-    ]
-    for ci, (cname, rule, styles) in enumerate(conditions, start=1):
-        cond_id = fc_id + ci
-        add_item(cond_id, fc_id, ci, 2002, cname)
-        add_props(cond_id, [(600, rule)])
-        add_styles(cond_id, styles)
-
-    # --- Feature collection (type 70) holding one feature per visit ---------
-    coll_id = fc_id + len(conditions) + 1
     survey_km = total["survey_m"] / 1000
     deadhead_km = total["deadhead_m"] / 1000
     hours = (total["survey_s"] + total["deadhead_s"]) / 3600
@@ -1261,19 +1341,8 @@ def write_mpz(visits, total, filename, title="Survey Route", collected_sections=
                    f"deadhead | est. {hours:.1f} h")
     if collected_sections:
         description += f" | {len(collected_sections)} already collected"
-    add_item(coll_id, 1, 2, 70, title, description=description,
-             feature_class_id=fc_id, show_on_map=1, display_mode=0, subtype=2)
-    add_props(coll_id, [(700, struct.pack("<i", 0)), (701, struct.pack("<i", 25)),
-                        (702, struct.pack("<i", 0))])
+    p = _MpzProject(filename, title, description)
 
-    def add_shape(item_id, coords, line):
-        con.execute("INSERT INTO t_shape(item_id, coordinates, coord_dimension, "
-                    "coord_type, line_color, line_width, fill_color, zorder) "
-                    "VALUES(?,?,1,0,?,?,?,0)",
-                    (item_id, _mpz_coords_blob(coords), line[0], line[1], line[2]))
-
-    item_id = coll_id
-    order_idx = 0
     width = max(4, len(str(len(visits))))
     for vi, visit in enumerate(visits):
         section = visit["section"]
@@ -1284,93 +1353,116 @@ def write_mpz(visits, total, filename, title="Survey Route", collected_sections=
 
         if visit["deadhead"]:
             dh = visit["deadhead"]
-            item_id += 1
-            order_idx += 1
-            add_item(item_id, coll_id, order_idx, 3, f"→ {label}",
-                     description=f"Transfer {dh['dist_m'] / 1000:.2f} km "
-                                 f"(~{dh['time_s'] / 60:.0f} min) to segment "
-                                 f"{label} (CollId {collid})",
-                     feature_class_id=fc_id, display_mode=1)
-            add_shape(item_id, dh["path"], MPZ_DEADHEAD_LINE)
-            add_props(item_id, [
-                (prop_ids["routename"], "Deadhead"),
-                (prop_ids["lengthft"], f"{dh['dist_m'] * 3.28084:.1f}"),
-                (prop_ids["routeorder"], str(visit["order"])),
-                (prop_ids["nextcollid"], str(collid)),
-            ])
+            p.add_feature(
+                f"→ {label}", dh["path"], MPZ_DEADHEAD_LINE,
+                description=f"Transfer {dh['dist_m'] / 1000:.2f} km "
+                            f"(~{dh['time_s'] / 60:.0f} min) to segment "
+                            f"{label} (CollId {collid})",
+                props=[(p.prop["routename"], "Deadhead"),
+                       (p.prop["lengthft"], f"{dh['dist_m'] * 3.28084:.1f}"),
+                       (p.prop["routeorder"], str(visit["order"])),
+                       (p.prop["nextcollid"], str(collid))])
 
-        item_id += 1
-        order_idx += 1
         # Drive direction relative to the digitized arrows decides the color:
         # with the arrows -> Dir=I (blue); against them -> Dir=D (pink).
         against_arrows = visit["reversed"] != section["digitized_reversed"]
         dir_out = "D" if against_arrows else "I"
         desc = (f"Run {visit['order']} of {len(visits)} | "
-                f"{section['length_m'] / 1000:.2f} km | ETA +{visit['eta_s'] / 3600:.1f} h")
+                f"{section['length_m'] / 1000:.2f} km | "
+                f"ETA +{visit['eta_s'] / 3600:.1f} h")
         desc += (" | PINK: drive AGAINST the arrows" if against_arrows
                  else " | BLUE: drive WITH the arrows")
         if section["dir_code"] not in ("", "I", "D") and section["dir_code"] != dir_out:
             desc += f" | original Dir: {section['dir_code']}"
         if next_collid is not None:
             desc += f" | next: CollId {next_collid}"
-        add_item(item_id, coll_id, order_idx, 3, f"{label} · {collid}",
-                 description=desc, feature_class_id=fc_id, display_mode=1)
-        add_shape(item_id, section["digitized_coords"], MPZ_SEGMENT_LINE)
 
-        values = [(2, section["fields"].get("routename"))]
-        seen = set()
-        for fname, value in section["fields"].items():
-            pid = prop_ids.get(fname)
-            if pid and fname not in ("routeorder", "nextcollid", "dir"):
-                values.append((pid, value))
-                seen.add(fname)
-        values.append((prop_ids["dir"], dir_out))
+        values, seen = p.field_props(section,
+                                     exclude=("routeorder", "nextcollid", "dir"))
+        values.append((p.prop["dir"], dir_out))
         if "collid" not in seen:
-            values.append((prop_ids["collid"], str(collid)))
+            values.append((p.prop["collid"], str(collid)))
         if "collected" not in seen:
-            values.append((prop_ids["collected"], "No"))
-        values.append((prop_ids["routeorder"], str(visit["order"])))
-        values.append((prop_ids["nextcollid"],
+            values.append((p.prop["collected"], "No"))
+        values.append((p.prop["routeorder"], str(visit["order"])))
+        values.append((p.prop["nextcollid"],
                        str(next_collid) if next_collid is not None else None))
-        add_props(item_id, values)
+        p.add_feature(f"{label} · {collid}", section["digitized_coords"],
+                      MPZ_SEGMENT_LINE, description=desc, props=values)
+
+    if return_path is not None and len(return_path) >= 2:
+        dist_m = path_length(return_path)
+        p.add_feature("→ Return", return_path, MPZ_DEADHEAD_LINE,
+                      description=f"Return to start: {dist_m / 1000:.2f} km",
+                      props=[(p.prop["routename"], "Deadhead"),
+                             (p.prop["lengthft"], f"{dist_m * 3.28084:.1f}")])
 
     # Already-collected sections ride along unrouted: original geometry and
     # fields, forced Collected=Yes so the fade condition applies on the map.
     for section in collected_sections:
         collid = section["collid"] or section["name"]
-        item_id += 1
-        order_idx += 1
-        add_item(item_id, coll_id, order_idx, 3, f"✓ {collid}",
-                 description="Already collected — not part of the route",
-                 feature_class_id=fc_id, display_mode=1)
-        add_shape(item_id, section["digitized_coords"], MPZ_SEGMENT_LINE)
-        values = [(2, section["fields"].get("routename"))]
-        for fname, value in section["fields"].items():
-            pid = prop_ids.get(fname)
-            if pid and fname not in ("routeorder", "nextcollid", "collected"):
-                values.append((pid, value))
-        values.append((prop_ids["collected"], "Yes"))
+        values, _ = p.field_props(section,
+                                  exclude=("routeorder", "nextcollid", "collected"))
+        values.append((p.prop["collected"], "Yes"))
         if "collid" not in section["fields"]:
-            values.append((prop_ids["collid"], str(collid)))
-        add_props(item_id, values)
+            values.append((p.prop["collid"], str(collid)))
+        p.add_feature(f"✓ {collid}", section["digitized_coords"],
+                      MPZ_SEGMENT_LINE,
+                      description="Already collected — not part of the route",
+                      props=values)
 
-    # --- Bookkeeping tables --------------------------------------------------
-    con.executemany("INSERT INTO t_sequence(id, sequence) VALUES(?,?)",
-                    [(1, item_id + 1), (2, 10001),
-                     (3, 10001 + len(MPZ_PROPERTIES)),
-                     (4, 10001), (5, 10001), (6, 10001)])
-    con.execute("INSERT INTO t_version(version, previous, update_date) VALUES(?,?,?)",
-                (MPZ_DB_VERSION, None, now))
-    con.execute("INSERT INTO t_metadata(name, value, update_date) VALUES(?,?,?)",
-                ("version", MPZ_DB_VERSION, now))
-    con.commit()
-    con.close()
+    return p.close()
 
-    with zipfile.ZipFile(filename, "w", zipfile.ZIP_DEFLATED) as z:
-        z.write(db_path, "data.sdb")
-        z.writestr(".com.miocool.mapplus.metadata/metadata.xml", MPZ_METADATA_XML)
-    os.remove(db_path)
-    return filename
+
+def write_segments_mpz(sections, filename, title, day_of=None):
+    """Write a plain (unrouted) segment collection as a Map Plus project.
+
+    Used by the daily planner for its updated segment files. `day_of` maps
+    id(section) -> planned day number: those segments get ScheduledDay set.
+    Sections whose 'scheduled' flag is on are written Scheduled=Yes (locked
+    into an earlier day - a re-run of the planner skips them), and collected
+    sections keep Collected=Yes; both fade on the map.
+    """
+    day_of = day_of or {}
+    n_locked = sum(1 for s in sections if s["scheduled"])
+    n_collected = sum(1 for s in sections if s["collected"])
+    description = f"{len(sections)} segments"
+    if day_of:
+        description += f" | {len(day_of)} in the current multi-day plan"
+    if n_locked:
+        description += f" | {n_locked} locked into earlier days"
+    if n_collected:
+        description += f" | {n_collected} collected"
+    p = _MpzProject(filename, title, description)
+
+    for section in sections:
+        collid = section["collid"] or section["name"]
+        values, seen = p.field_props(
+            section, exclude=("routeorder", "nextcollid", "scheduled",
+                              "scheduledday"))
+        if "collid" not in seen:
+            values.append((p.prop["collid"], str(collid)))
+        if "collected" not in seen:
+            values.append((p.prop["collected"],
+                           "Yes" if section["collected"] else "No"))
+        name = str(collid)
+        desc = None
+        day = day_of.get(id(section))
+        if section["collected"]:
+            name = f"✓ {collid}"
+            desc = "Already collected"
+        elif section["scheduled"]:
+            name = f"◷ {collid}"
+            values.append((p.prop["scheduled"], "Yes"))
+            desc = "Locked into an earlier day's route"
+        elif day is not None:
+            name = f"Day {day} · {collid}"
+            values.append((p.prop["scheduledday"], str(day)))
+            desc = f"Planned for day {day}"
+        p.add_feature(name, section["digitized_coords"], MPZ_SEGMENT_LINE,
+                      description=desc, props=values)
+
+    return p.close()
 
 
 def write_html(route, legs, total, filename, collected_sections=()):
