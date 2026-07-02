@@ -8,12 +8,18 @@ field workflow. Segments already marked `Collected = Yes` in the input are
 left out of the route and carried through faded, so re-uploading a partially
 collected project plans only what's left.
 
+Two programs:
+
+- **`Route_Planner.py`** — one continuous route over everything remaining.
+- **`Daily_Planner.py`** — a balanced multi-day plan of hotel-to-hotel loops
+  (see [Daily planner](#daily-planner-hotel-loops) below).
+
 Everything lives in one file: `Route_Planner.py`.
 
 ## Install
 
 ```bash
-pip install -r requirements.txt   # requests (OSM data) + PyQt6 (GUI) — both optional
+pip install -r requirements.txt   # requests (OSM data; needed unless --no-osm) + PyQt6 (GUI)
 ```
 
 ## Usage
@@ -36,9 +42,13 @@ Try it: `python Route_Planner.py sample.kml --no-osm`
    state chopped apart reconnect.
 3. **Chain sections** — sections that run end-to-start are joined into single
    continuous runs (driven in one pass, and far fewer pieces to order).
-4. **OSM network (optional, cached)** — one Overpass query supplies connecting
-   roads for deadhead routing and fills in missing speed limits. Chain
-   endpoints are linked to the nearest OSM nodes so the two networks connect.
+4. **OSM network (cached)** — the survey area is fetched from Overpass in
+   small tiles (large regions can't be fetched in one query), with retries
+   across several Overpass servers. Tiles are cached on disk in
+   `overpass_cache/`, so only the first run downloads. If the road network
+   can't be fetched the planner stops with an error rather than producing a
+   route with off-road jumps. Chain endpoints are linked to the nearest OSM
+   nodes so the two networks connect, and missing speed limits are filled in.
 5. **Solve** — greedy nearest-section ordering. Each step is a single Dijkstra
    search that stops the moment it reaches the closest remaining section, so
    back-to-back sections cost nothing to connect. Two-way runs can be entered
@@ -88,6 +98,69 @@ Field workflow:
   Yes` keep their faded look as `✓ <CollId>` features, and a fresh route is
   planned over only the remaining segments — their roads are still used for
   transfers where helpful.
+
+## Daily planner (hotel loops)
+
+`Daily_Planner.py` turns the remaining segments into **balanced daily
+routes** that each start and end at your hotel and fit inside a driving
+shift (`--hours`, default 6 — wiggle room for gas and breaks inside an
+8-hour day):
+
+```bash
+python Daily_Planner.py segments.mpz --hotel "8051 Peach St, Erie PA"
+python Daily_Planner.py segments.mpz --hotel 42.05,-80.08 --hours 6 --days 4
+python Daily_Planner.py segments.mpz --hotel 42.05,-80.08 --lock 1
+```
+
+How it balances the days:
+
+1. Continuous runs are swept by compass bearing around the hotel into one
+   wedge per day, each holding about the same collection time. Wedges
+   keep every day's work in one compact area, so finishing a day never
+   strands isolated segments in another day's territory — what remains is
+   still clustered for tomorrow.
+2. Each day is solved as a real road route (same engine as
+   `Route_Planner.py`: OSM network, blue/pink directions, transfers on
+   roads) from the hotel through its wedge and back.
+3. Days are rebalanced on true driving time: boundary runs shift between
+   neighboring days until no day is dramatically bigger than another — a
+   run may leave its locally optimal day if that keeps the whole week
+   consistent.
+4. The shift cap is hard. If the days run over, more days are added
+   (up to `--days`, default 5); if it still doesn't fit, days shed their
+   **nearest-to-hotel** runs into an unplanned **filler pool** — far
+   segments always stay inside a planned, time-boxed day so a shift never
+   ends with a long drive home, and the filler near the hotel is what you
+   grab when a day finishes early.
+
+Every route is printed with estimated hours against the shift, total miles,
+collection vs deadhead split, and the segment collection order (`123I` =
+CollId 123 blue / with the arrows, `456D` = pink / against them).
+`--min-miles` is optional and only flags routes under the threshold —
+balance is driven by time.
+
+Shift hours come from **real field pace**, not map speed limits (rural
+roads mostly carry no posted limit in OSM and would look far slower than
+reality): 35 mph while collecting on rural roads, 45 mph on deadhead. At
+that pace a 6 h day holds roughly 200–250 mi of driving. No tuning needed —
+`--collect-mph` / `--transfer-mph` exist only for unusual regions.
+
+Outputs (in `--out-dir`, default `daily_plan/`):
+
+- `day_N.mpz` / `day_N.gpx` — one complete hotel-to-hotel route per day.
+- `plan_overview.html` — all days on one map, one color per day, hotel
+  marked.
+- `plan_segments.mpz` — every segment tagged with its planned day
+  (`ScheduledDay`).
+- `remaining_segments.mpz` (with `--lock N` or the interactive prompt) —
+  route N's segments marked `Scheduled = Yes`.
+
+Daily workflow: preview the plan, lock in the route you'll drive
+(`--lock 1`), collect it, then re-run tomorrow on
+`remaining_segments.mpz` — or on a fresh Map Plus export with
+`Collected = Yes` set — and get a fresh balanced plan over what's left.
+Finished early? Grab filler segments near the hotel, mark them collected,
+and the next re-run accounts for everything automatically.
 
 ## Input format
 

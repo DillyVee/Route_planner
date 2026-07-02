@@ -21,8 +21,10 @@ How it works
 3. Chain sections that run end-to-start into single continuous runs, so
    "chopped" road sections are driven in one pass and the solver has far
    fewer pieces to order.
-4. Optionally fetch the surrounding OSM road network once (cached) for
-   realistic deadhead routing and speed limits.
+4. Fetch the surrounding OSM road network (tiled, cached, with failover
+   across Overpass servers) for realistic deadhead routing and speed
+   limits. If the network can't be fetched, planning stops with an error
+   instead of producing a route with off-road jumps (--no-osm opts out).
 5. Greedy nearest-section ordering: from the current position, a single
    Dijkstra search runs only until it touches the closest remaining section
    (zero cost when the next section starts where the last one ended).
@@ -55,7 +57,7 @@ import webbrowser
 import zipfile
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from math import asin, cos, radians, sin, sqrt
+from math import asin, cos, floor, radians, sin, sqrt
 from xml.etree import ElementTree as ET
 from xml.sax.saxutils import escape
 
@@ -63,14 +65,29 @@ KML_NS = "{http://www.opengis.net/kml/2.2}"
 DEFAULT_SPEED_KMH = 30.0
 ENDPOINT_MERGE_TOLERANCE_M = 15.0
 OSM_LINK_TOLERANCE_M = 50.0
-OVERPASS_URL = "https://overpass-api.de/api/interpreter"
-OVERPASS_CACHE_FILE = "overpass_cache.json"
+# Multiple Overpass servers: the primary is often busy, and losing the road
+# network means transfers can't follow roads, so failover matters.
+OVERPASS_URLS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
+]
+OVERPASS_CACHE_DIR = "overpass_cache"
+# Survey areas can span hundreds of km; one Overpass query for the whole
+# bounding box fails on anything big, so the area is fetched in small tiles.
+OSM_TILE_DEG = 0.25
+# Ways that can never be driven; filtered server-side to shrink downloads.
+OSM_EXCLUDED_HIGHWAYS = ("footway|path|cycleway|steps|pedestrian|bridleway|"
+                         "corridor|platform|proposed|construction|abandoned|"
+                         "razed|raceway|escape|busway")
 
-# Fallback speeds (km/h) by OSM highway classification.
+# Fallback speeds (km/h) by OSM highway classification, for roads with no
+# posted limit mapped. Rural collection roads (tertiary/unclassified/
+# residential out here) really drive at ~35 mph (56 km/h).
 HIGHWAY_SPEEDS = {
     "motorway": 110, "motorway_link": 80, "trunk": 90, "trunk_link": 70,
     "primary": 70, "primary_link": 50, "secondary": 60, "secondary_link": 50,
-    "tertiary": 50, "tertiary_link": 40, "unclassified": 40, "residential": 30,
+    "tertiary": 56, "tertiary_link": 45, "unclassified": 56, "residential": 56,
     "living_street": 20, "service": 20, "track": 15,
 }
 
@@ -206,6 +223,7 @@ def _build_section(coords, fields, name):
         "collid": fields.get("collid"),
         "dir_code": dir_code,
         "collected": (fields.get("collected") or "").strip().lower().startswith("y"),
+        "scheduled": (fields.get("scheduled") or "").strip().lower().startswith("y"),
         "fields": fields,
     }
 
@@ -506,76 +524,153 @@ def chain_sections(sections, log=print):
 # OSM road network (optional, cached)
 # ============================================================================
 
-def fetch_osm_ways(bbox, cache_file=OVERPASS_CACHE_FILE, timeout=90, log=print):
-    """Fetch all roads in bbox from Overpass, with a persistent JSON cache.
+def _overpass_query(query, timeout, log, attempts=1):
+    """POST a query to Overpass, rotating through mirrors with backoff.
 
-    Returns a list of {geometry: [(lat, lon)...], speed_kmh, oneway} dicts,
-    or [] if the network/dependency is unavailable.
+    Returns the element list, or raises RuntimeError once every server has
+    failed `attempts` times - the road network is required to keep transfers
+    on roads, so a failed fetch must not be ignored.
     """
-    min_lat, min_lon, max_lat, max_lon = bbox
-    cache_key = f"{min_lat:.4f},{min_lon:.4f},{max_lat:.4f},{max_lon:.4f}"
+    import requests
+    last_err = None
+    for attempt in range(attempts):
+        if attempt:
+            time.sleep(2 ** attempt)
+        for url in OVERPASS_URLS:
+            try:
+                resp = requests.post(url, data={"data": query}, timeout=timeout,
+                                     headers={"User-Agent": "SurveyRoutePlanner/1.0"})
+                resp.raise_for_status()
+                return resp.json().get("elements", [])
+            except Exception as e:
+                last_err = e
+                log(f"    {url.split('/')[2]}: {e}")
+    raise RuntimeError(f"All Overpass servers failed: {last_err}")
 
-    cache = {}
-    if os.path.exists(cache_file):
-        try:
-            with open(cache_file) as f:
-                cache = json.load(f)
-        except (OSError, ValueError):
-            cache = {}
-    if cache_key in cache:
-        log(f"  Using cached OSM data ({len(cache[cache_key])} ways)")
-        return [
-            {"geometry": [tuple(pt) for pt in w["geometry"]],
-             "speed_kmh": w["speed_kmh"], "oneway": w["oneway"]}
-            for w in cache[cache_key]
-        ]
 
-    try:
-        import requests
-    except ImportError:
-        log("  'requests' not installed - skipping OSM data")
-        return []
+def _fetch_bbox_ways(bbox, timeout, log, depth=0):
+    """Fetch drivable ways in bbox, subdividing when servers can't cope.
 
+    Dense urban tiles can be too heavy for busy Overpass servers; a query
+    that fails on every server is split into four quadrants (twice at most)
+    - smaller queries succeed where big ones time out.
+    """
+    s, w, n, e = bbox
     query = (f'[out:json][timeout:{timeout}];'
-             f'way["highway"]({min_lat},{min_lon},{max_lat},{max_lon});out geom;')
+             f'way["highway"]["highway"!~"^({OSM_EXCLUDED_HIGHWAYS})$"]'
+             f'["area"!="yes"]({s:.6f},{w:.6f},{n:.6f},{e:.6f});out geom;')
     try:
-        log("  Querying Overpass API for the road network...")
-        resp = requests.post(OVERPASS_URL, data={"data": query}, timeout=timeout,
-                             headers={"User-Agent": "SurveyRoutePlanner/1.0"})
-        resp.raise_for_status()
-        elements = resp.json().get("elements", [])
-    except Exception as e:
-        log(f"  OSM fetch failed ({e}) - continuing with survey sections only")
-        return []
+        attempts = 3 if depth >= 2 else 1
+        return _ways_from_elements(_overpass_query(query, timeout, log,
+                                                   attempts=attempts))
+    except RuntimeError:
+        if depth >= 2:
+            raise
+        log(f"    Tile too heavy for the servers right now - "
+            f"splitting into quadrants...")
+        mid_lat, mid_lon = (s + n) / 2, (w + e) / 2
+        ways = []
+        for quadrant in ((s, w, mid_lat, mid_lon), (s, mid_lon, mid_lat, e),
+                         (mid_lat, w, n, mid_lon), (mid_lat, mid_lon, n, e)):
+            ways.extend(_fetch_bbox_ways(quadrant, timeout, log, depth + 1))
+        return ways
 
+
+def _ways_from_elements(elements):
+    """Convert Overpass elements to {id, geometry, speed_kmh, oneway} dicts."""
     ways = []
     for el in elements:
         geometry = el.get("geometry") or []
         if el.get("type") != "way" or len(geometry) < 2:
             continue
         tags = el.get("tags", {})
-        if tags.get("highway") in ("footway", "path", "cycleway", "steps", "pedestrian"):
-            continue
         speed = parse_speed_limit(tags.get("maxspeed", ""))
         if not speed:
             speed = HIGHWAY_SPEEDS.get(tags.get("highway"), DEFAULT_SPEED_KMH)
         ways.append({
+            "id": el.get("id"),
             "geometry": [snap_coord(pt["lat"], pt["lon"]) for pt in geometry],
             "speed_kmh": speed,
             "oneway": tags.get("oneway", "no").lower() in ("yes", "true", "1", "-1"),
         })
+    return ways
 
-    cache[cache_key] = [
-        {"geometry": [list(pt) for pt in w["geometry"]],
-         "speed_kmh": w["speed_kmh"], "oneway": w["oneway"]}
-        for w in ways
-    ]
+
+def fetch_osm_ways(points, cache_dir=OVERPASS_CACHE_DIR, timeout=120, log=print):
+    """Fetch the drivable road network covering all survey `points`.
+
+    The area is split into small tiles (survey regions can span hundreds of
+    km - a single Overpass query for the whole bounding box just times out).
+    Every tile touching a survey point, plus a one-tile ring around it for
+    connecting roads, is fetched with retry/failover and cached on disk one
+    file per tile, so a re-run only downloads what is missing.
+
+    Returns a list of {geometry: [(lat, lon)...], speed_kmh, oneway} dicts.
+    Raises RuntimeError if any tile cannot be fetched: without the full road
+    network, transfers between segments could not be kept on roads.
+    """
     try:
-        with open(cache_file, "w") as f:
-            json.dump(cache, f)
-    except OSError:
-        pass
-    log(f"  Fetched {len(ways)} OSM ways (cached for next run)")
+        import requests  # noqa: F401
+    except ImportError:
+        raise RuntimeError(
+            "The 'requests' package is required to download the OSM road "
+            "network (pip install requests), or pass --no-osm to accept "
+            "straight-line transfers.")
+
+    core = {(int(floor(lat / OSM_TILE_DEG)), int(floor(lon / OSM_TILE_DEG)))
+            for lat, lon in points}
+    tiles = sorted({(tx + dx, ty + dy) for tx, ty in core
+                    for dx in (-1, 0, 1) for dy in (-1, 0, 1)})
+    os.makedirs(cache_dir, exist_ok=True)
+
+    ways = []
+    seen_ids = set()
+
+    def add_ways(tile_ways):
+        for w in tile_ways:
+            wid = w.get("id")
+            if wid is not None:
+                if wid in seen_ids:
+                    continue
+                seen_ids.add(wid)
+            ways.append({"geometry": [tuple(pt) for pt in w["geometry"]],
+                         "speed_kmh": w["speed_kmh"], "oneway": w["oneway"]})
+
+    to_fetch = []
+    for tx, ty in tiles:
+        tile_file = os.path.join(cache_dir, f"tile_{tx}_{ty}.json")
+        if os.path.exists(tile_file):
+            try:
+                with open(tile_file) as f:
+                    add_ways(json.load(f)["ways"])
+                continue
+            except (OSError, ValueError, KeyError):
+                pass  # corrupt cache entry: refetch
+        to_fetch.append((tx, ty, tile_file))
+
+    if to_fetch:
+        log(f"  Downloading road network: {len(to_fetch)} of {len(tiles)} "
+            f"tiles not cached yet...")
+    else:
+        log(f"  Road network loaded from cache ({len(tiles)} tiles)")
+
+    for i, (tx, ty, tile_file) in enumerate(to_fetch, start=1):
+        bbox = (tx * OSM_TILE_DEG, ty * OSM_TILE_DEG,
+                (tx + 1) * OSM_TILE_DEG, (ty + 1) * OSM_TILE_DEG)
+        log(f"  Tile {i}/{len(to_fetch)} ({tx},{ty})...")
+        tile_ways = _fetch_bbox_ways(bbox, timeout, log)
+        try:
+            with open(tile_file, "w") as f:
+                json.dump({"ways": [
+                    {"id": w["id"], "geometry": [list(pt) for pt in w["geometry"]],
+                     "speed_kmh": w["speed_kmh"], "oneway": w["oneway"]}
+                    for w in tile_ways
+                ]}, f)
+        except OSError:
+            pass
+        add_ways(tile_ways)
+
+    log(f"  Road network: {len(ways)} OSM ways across {len(tiles)} tiles")
     return ways
 
 
@@ -950,7 +1045,8 @@ MPZ_METADATA_XML = f"""<?xml version="1.0" encoding="UTF-8"?>
 
 # Property schema copied from the reference exports (name, value_type,
 # options); value_type 1=text, 11=integer, 13=decimal. RouteOrder and
-# NextCollId are added so each feature knows its place in the drive order.
+# NextCollId are added so each feature knows its place in the drive order;
+# Scheduled and ScheduledDay carry the daily planner's multi-day state.
 MPZ_PROPERTIES = [
     ("CollId", 11, None), ("RouteName", 1, None), ("Dir", 1, None),
     ("Collected", 1, "Yes|No|"), ("LengthFt", 13, None), ("Region", 11, None),
@@ -958,6 +1054,7 @@ MPZ_PROPERTIES = [
     ("SegNo", 1, None), ("BegM", 13, None), ("EndM", 13, None),
     ("IsPilot", 1, None),
     ("RouteOrder", 11, None), ("NextCollId", 1, None),
+    ("Scheduled", 1, "Yes|No|"), ("ScheduledDay", 11, None),
 ]
 
 # Style constants lifted from the reference (color ints as decimal strings).
@@ -1075,7 +1172,159 @@ def _mpz_coords_blob(coords):
             + b"".join(struct.pack("<dd", lat, lon) for lat, lon in coords))
 
 
-def write_mpz(visits, total, filename, title="Survey Route", collected_sections=()):
+class _MpzProject:
+    """Scaffolding shared by every Map Plus project writer.
+
+    Creates the database in the reference schema with the feature class,
+    property definitions, conditional display rules, and one feature
+    collection; features are appended with add_feature() and close() zips
+    everything into the .mpz archive.
+    """
+
+    # Conditional display rules (type 2002), copied from the reference files:
+    # segments are pink by default (drive against the digitized arrows) and
+    # blue when Dir=I (drive with the arrows); pilot segments recolor; then
+    # deadhead transfers gray out and Scheduled / Collected segments fade.
+    CONDITIONS = [
+        ("Direction I", '[Dir]=="I"', {211: MPZ_COLOR_DIR_I}),
+        ("Pilot", '[IsPilot].beginswith("Y")', {211: MPZ_COLOR_PILOT}),
+        ("Pilot Direction I", '[Dir]=="I"&&[IsPilot].beginswith("Y")',
+         {211: MPZ_COLOR_DIR_I_PILOT}),
+        ("Deadhead", '[RouteName]=="Deadhead"',
+         {210: "2", 211: str(MPZ_DEADHEAD_LINE[0]), 212: "0.5"}),
+        ("Scheduled", '[Scheduled].beginswith("Y")',
+         {210: "2", 211: "1679834990", 212: "0.5", 234: "0"}),
+        ("Collected", '[Collected].beginswith("Y")',
+         {210: "2", 211: "1677721600", 212: "0.2972973", 220: "0", 234: "0"}),
+    ]
+
+    def __init__(self, filename, title, description=None):
+        self.filename = filename
+        self.now = time.time()
+        self._guid_base = uuid.uuid4().hex[:10].upper()
+        self._guid_n = 0
+        self.db_path = filename + ".sdb.tmp"
+        if os.path.exists(self.db_path):
+            os.remove(self.db_path)
+        self.con = sqlite3.connect(self.db_path)
+        for sql in MPZ_TABLE_SQL:
+            self.con.execute(sql)
+
+        # Feature class (type 2001) with its properties and display rules.
+        self.fc_id = 10001
+        today = datetime.now()
+        self.add_item(self.fc_id, 1, 1, 2001, title,
+                      description=f"{today:%b} {today.day}, {today.year}",
+                      icon_id=0, subtype=2)
+        self.add_styles(self.fc_id, MPZ_CLASS_STYLE)
+
+        self.prop = {}
+        for i, (pname, value_type, options) in enumerate(MPZ_PROPERTIES, start=1):
+            pid = 10000 + i
+            self.prop[pname.lower()] = pid
+            self.con.execute(
+                "INSERT INTO t_property(id, feature_class_id, order_idx, name, "
+                "type, value_type, options, insert_date, update_date) "
+                "VALUES(?,?,?,?,2,?,?,?,?)",
+                (pid, self.fc_id, i, pname, value_type, options,
+                 self.now, self.now))
+        # Template rows the reference carries on the feature-class item itself.
+        self.add_props(self.fc_id, [(2, None)] + [(pid, None) for pid in
+                                                  sorted(self.prop.values())])
+
+        for ci, (cname, rule, styles) in enumerate(self.CONDITIONS, start=1):
+            cond_id = self.fc_id + ci
+            self.add_item(cond_id, self.fc_id, ci, 2002, cname)
+            self.add_props(cond_id, [(600, rule)])
+            self.add_styles(cond_id, styles)
+
+        # Feature collection (type 70) that holds the features.
+        self.coll_id = self.fc_id + len(self.CONDITIONS) + 1
+        self.add_item(self.coll_id, 1, 2, 70, title, description=description,
+                      feature_class_id=self.fc_id, show_on_map=1,
+                      display_mode=0, subtype=2)
+        self.add_props(self.coll_id, [(700, struct.pack("<i", 0)),
+                                      (701, struct.pack("<i", 25)),
+                                      (702, struct.pack("<i", 0))])
+        self.item_id = self.coll_id
+        self.order_idx = 0
+
+    def _guid(self):
+        self._guid_n += 1
+        return f"RP{self._guid_base}L{self._guid_n}"
+
+    def add_item(self, item_id, parent_id, order_idx, item_type, name, **kw):
+        row = {"id": item_id, "guid": self._guid(), "parent_id": parent_id,
+               "order_idx": order_idx, "type": item_type, "name": name,
+               "remind_distance": 0, "insert_date": self.now,
+               "update_date": self.now}
+        row.update(kw)
+        cols = ", ".join(row)
+        self.con.execute(
+            f"INSERT INTO t_item({cols}) VALUES({', '.join('?' * len(row))})",
+            list(row.values()))
+
+    def add_props(self, item_id, values):
+        for pid, value in values:
+            blob = value.encode("utf-8") if isinstance(value, str) else value
+            self.con.execute(
+                "INSERT INTO t_property_lkp(item_id, property_id, value) "
+                "VALUES(?,?,?)", (item_id, pid, blob))
+
+    def add_styles(self, item_id, styles):
+        self.con.executemany(
+            "INSERT INTO t_feature_style_lkp(item_id, style, value) "
+            "VALUES(?,?,?)", [(item_id, k, v) for k, v in styles.items()])
+
+    def add_feature(self, name, coords, line, description=None, props=()):
+        self.item_id += 1
+        self.order_idx += 1
+        self.add_item(self.item_id, self.coll_id, self.order_idx, 3, name,
+                      description=description, feature_class_id=self.fc_id,
+                      display_mode=1)
+        self.con.execute(
+            "INSERT INTO t_shape(item_id, coordinates, coord_dimension, "
+            "coord_type, line_color, line_width, fill_color, zorder) "
+            "VALUES(?,?,1,0,?,?,?,0)",
+            (self.item_id, _mpz_coords_blob(coords),
+             line[0], line[1], line[2]))
+        self.add_props(self.item_id, props)
+
+    def field_props(self, section, exclude=()):
+        """Property rows carrying a section's original fields over."""
+        values = [(2, section["fields"].get("routename"))]
+        seen = set()
+        for fname, value in section["fields"].items():
+            pid = self.prop.get(fname)
+            if pid and fname not in exclude:
+                values.append((pid, value))
+                seen.add(fname)
+        return values, seen
+
+    def close(self):
+        self.con.executemany(
+            "INSERT INTO t_sequence(id, sequence) VALUES(?,?)",
+            [(1, self.item_id + 1), (2, 10001),
+             (3, 10001 + len(MPZ_PROPERTIES)), (4, 10001), (5, 10001),
+             (6, 10001)])
+        self.con.execute(
+            "INSERT INTO t_version(version, previous, update_date) "
+            "VALUES(?,?,?)", (MPZ_DB_VERSION, None, self.now))
+        self.con.execute(
+            "INSERT INTO t_metadata(name, value, update_date) VALUES(?,?,?)",
+            ("version", MPZ_DB_VERSION, self.now))
+        self.con.commit()
+        self.con.close()
+        with zipfile.ZipFile(self.filename, "w", zipfile.ZIP_DEFLATED) as z:
+            z.write(self.db_path, "data.sdb")
+            z.writestr(".com.miocool.mapplus.metadata/metadata.xml",
+                       MPZ_METADATA_XML)
+        os.remove(self.db_path)
+        return self.filename
+
+
+def write_mpz(visits, total, filename, title="Survey Route",
+              collected_sections=(), return_path=None):
     """Write the planned route as a Map Plus project archive (.mpz).
 
     Segments keep their original digitized geometry, so Map Plus draws the
@@ -1083,84 +1332,9 @@ def write_mpz(visits, total, filename, title="Survey Route", collected_sections=
     written to match the drive: I (blue, drive with the arrows) or D (pink,
     drive against them). Sections already collected in the input are included
     with Collected=Yes — they fade out and are not part of the route order.
+    `return_path` adds a final deadhead feature back to the start (for daily
+    loops that end where they began).
     """
-    now = time.time()
-    guid_base = uuid.uuid4().hex[:10].upper()
-    guid_n = 0
-
-    def guid():
-        nonlocal guid_n
-        guid_n += 1
-        return f"RP{guid_base}L{guid_n}"
-
-    db_path = filename + ".sdb.tmp"
-    if os.path.exists(db_path):
-        os.remove(db_path)
-    con = sqlite3.connect(db_path)
-    for sql in MPZ_TABLE_SQL:
-        con.execute(sql)
-
-    def add_item(item_id, parent_id, order_idx, item_type, name, **kw):
-        row = {"id": item_id, "guid": guid(), "parent_id": parent_id,
-               "order_idx": order_idx, "type": item_type, "name": name,
-               "remind_distance": 0, "insert_date": now, "update_date": now}
-        row.update(kw)
-        cols = ", ".join(row)
-        con.execute(f"INSERT INTO t_item({cols}) VALUES({', '.join('?' * len(row))})",
-                    list(row.values()))
-
-    def add_props(item_id, values):
-        for pid, value in values:
-            blob = value.encode("utf-8") if isinstance(value, str) else value
-            con.execute("INSERT INTO t_property_lkp(item_id, property_id, value) "
-                        "VALUES(?,?,?)", (item_id, pid, blob))
-
-    def add_styles(item_id, styles):
-        con.executemany("INSERT INTO t_feature_style_lkp(item_id, style, value) "
-                        "VALUES(?,?,?)", [(item_id, k, v) for k, v in styles.items()])
-
-    # --- Feature class (type 2001) with its properties and display rules ----
-    fc_id = 10001
-    today = datetime.now()
-    add_item(fc_id, 1, 1, 2001, title,
-             description=f"{today:%b} {today.day}, {today.year}",
-             icon_id=0, subtype=2)
-    add_styles(fc_id, MPZ_CLASS_STYLE)
-
-    prop_ids = {}
-    for i, (pname, value_type, options) in enumerate(MPZ_PROPERTIES, start=1):
-        pid = 10000 + i
-        prop_ids[pname.lower()] = pid
-        con.execute("INSERT INTO t_property(id, feature_class_id, order_idx, name, "
-                    "type, value_type, options, insert_date, update_date) "
-                    "VALUES(?,?,?,?,2,?,?,?,?)",
-                    (pid, fc_id, i, pname, value_type, options, now, now))
-    # Template rows the reference carries on the feature-class item itself.
-    add_props(fc_id, [(2, None)] + [(pid, None) for pid in
-                                    sorted(prop_ids.values())])
-
-    # Conditional display rules (type 2002), copied from the reference files:
-    # segments are pink by default (drive against the digitized arrows) and
-    # blue when Dir=I (drive with the arrows); pilot segments recolor; then
-    # deadhead transfers gray out and Collected=Yes segments fade.
-    conditions = [
-        ("Direction I", '[Dir]=="I"', {211: MPZ_COLOR_DIR_I}),
-        ("Pilot", '[IsPilot].beginswith("Y")', {211: MPZ_COLOR_PILOT}),
-        ("Pilot Direction I", '[Dir]=="I"&&[IsPilot].beginswith("Y")',
-         {211: MPZ_COLOR_DIR_I_PILOT}),
-        ("Deadhead", '[RouteName]=="Deadhead"',
-         {210: "2", 211: str(MPZ_DEADHEAD_LINE[0]), 212: "0.5"}),
-        ("Collected", '[Collected].beginswith("Y")',
-         {210: "2", 211: "1677721600", 212: "0.2972973", 220: "0", 234: "0"}),
-    ]
-    for ci, (cname, rule, styles) in enumerate(conditions, start=1):
-        cond_id = fc_id + ci
-        add_item(cond_id, fc_id, ci, 2002, cname)
-        add_props(cond_id, [(600, rule)])
-        add_styles(cond_id, styles)
-
-    # --- Feature collection (type 70) holding one feature per visit ---------
-    coll_id = fc_id + len(conditions) + 1
     survey_km = total["survey_m"] / 1000
     deadhead_km = total["deadhead_m"] / 1000
     hours = (total["survey_s"] + total["deadhead_s"]) / 3600
@@ -1169,19 +1343,8 @@ def write_mpz(visits, total, filename, title="Survey Route", collected_sections=
                    f"deadhead | est. {hours:.1f} h")
     if collected_sections:
         description += f" | {len(collected_sections)} already collected"
-    add_item(coll_id, 1, 2, 70, title, description=description,
-             feature_class_id=fc_id, show_on_map=1, display_mode=0, subtype=2)
-    add_props(coll_id, [(700, struct.pack("<i", 0)), (701, struct.pack("<i", 25)),
-                        (702, struct.pack("<i", 0))])
+    p = _MpzProject(filename, title, description)
 
-    def add_shape(item_id, coords, line):
-        con.execute("INSERT INTO t_shape(item_id, coordinates, coord_dimension, "
-                    "coord_type, line_color, line_width, fill_color, zorder) "
-                    "VALUES(?,?,1,0,?,?,?,0)",
-                    (item_id, _mpz_coords_blob(coords), line[0], line[1], line[2]))
-
-    item_id = coll_id
-    order_idx = 0
     width = max(4, len(str(len(visits))))
     for vi, visit in enumerate(visits):
         section = visit["section"]
@@ -1192,93 +1355,116 @@ def write_mpz(visits, total, filename, title="Survey Route", collected_sections=
 
         if visit["deadhead"]:
             dh = visit["deadhead"]
-            item_id += 1
-            order_idx += 1
-            add_item(item_id, coll_id, order_idx, 3, f"→ {label}",
-                     description=f"Transfer {dh['dist_m'] / 1000:.2f} km "
-                                 f"(~{dh['time_s'] / 60:.0f} min) to segment "
-                                 f"{label} (CollId {collid})",
-                     feature_class_id=fc_id, display_mode=1)
-            add_shape(item_id, dh["path"], MPZ_DEADHEAD_LINE)
-            add_props(item_id, [
-                (prop_ids["routename"], "Deadhead"),
-                (prop_ids["lengthft"], f"{dh['dist_m'] * 3.28084:.1f}"),
-                (prop_ids["routeorder"], str(visit["order"])),
-                (prop_ids["nextcollid"], str(collid)),
-            ])
+            p.add_feature(
+                f"→ {label}", dh["path"], MPZ_DEADHEAD_LINE,
+                description=f"Transfer {dh['dist_m'] / 1000:.2f} km "
+                            f"(~{dh['time_s'] / 60:.0f} min) to segment "
+                            f"{label} (CollId {collid})",
+                props=[(p.prop["routename"], "Deadhead"),
+                       (p.prop["lengthft"], f"{dh['dist_m'] * 3.28084:.1f}"),
+                       (p.prop["routeorder"], str(visit["order"])),
+                       (p.prop["nextcollid"], str(collid))])
 
-        item_id += 1
-        order_idx += 1
         # Drive direction relative to the digitized arrows decides the color:
         # with the arrows -> Dir=I (blue); against them -> Dir=D (pink).
         against_arrows = visit["reversed"] != section["digitized_reversed"]
         dir_out = "D" if against_arrows else "I"
         desc = (f"Run {visit['order']} of {len(visits)} | "
-                f"{section['length_m'] / 1000:.2f} km | ETA +{visit['eta_s'] / 3600:.1f} h")
+                f"{section['length_m'] / 1000:.2f} km | "
+                f"ETA +{visit['eta_s'] / 3600:.1f} h")
         desc += (" | PINK: drive AGAINST the arrows" if against_arrows
                  else " | BLUE: drive WITH the arrows")
         if section["dir_code"] not in ("", "I", "D") and section["dir_code"] != dir_out:
             desc += f" | original Dir: {section['dir_code']}"
         if next_collid is not None:
             desc += f" | next: CollId {next_collid}"
-        add_item(item_id, coll_id, order_idx, 3, f"{label} · {collid}",
-                 description=desc, feature_class_id=fc_id, display_mode=1)
-        add_shape(item_id, section["digitized_coords"], MPZ_SEGMENT_LINE)
 
-        values = [(2, section["fields"].get("routename"))]
-        seen = set()
-        for fname, value in section["fields"].items():
-            pid = prop_ids.get(fname)
-            if pid and fname not in ("routeorder", "nextcollid", "dir"):
-                values.append((pid, value))
-                seen.add(fname)
-        values.append((prop_ids["dir"], dir_out))
+        values, seen = p.field_props(section,
+                                     exclude=("routeorder", "nextcollid", "dir"))
+        values.append((p.prop["dir"], dir_out))
         if "collid" not in seen:
-            values.append((prop_ids["collid"], str(collid)))
+            values.append((p.prop["collid"], str(collid)))
         if "collected" not in seen:
-            values.append((prop_ids["collected"], "No"))
-        values.append((prop_ids["routeorder"], str(visit["order"])))
-        values.append((prop_ids["nextcollid"],
+            values.append((p.prop["collected"], "No"))
+        values.append((p.prop["routeorder"], str(visit["order"])))
+        values.append((p.prop["nextcollid"],
                        str(next_collid) if next_collid is not None else None))
-        add_props(item_id, values)
+        p.add_feature(f"{label} · {collid}", section["digitized_coords"],
+                      MPZ_SEGMENT_LINE, description=desc, props=values)
+
+    if return_path is not None and len(return_path) >= 2:
+        dist_m = path_length(return_path)
+        p.add_feature("→ Return", return_path, MPZ_DEADHEAD_LINE,
+                      description=f"Return to start: {dist_m / 1000:.2f} km",
+                      props=[(p.prop["routename"], "Deadhead"),
+                             (p.prop["lengthft"], f"{dist_m * 3.28084:.1f}")])
 
     # Already-collected sections ride along unrouted: original geometry and
     # fields, forced Collected=Yes so the fade condition applies on the map.
     for section in collected_sections:
         collid = section["collid"] or section["name"]
-        item_id += 1
-        order_idx += 1
-        add_item(item_id, coll_id, order_idx, 3, f"✓ {collid}",
-                 description="Already collected — not part of the route",
-                 feature_class_id=fc_id, display_mode=1)
-        add_shape(item_id, section["digitized_coords"], MPZ_SEGMENT_LINE)
-        values = [(2, section["fields"].get("routename"))]
-        for fname, value in section["fields"].items():
-            pid = prop_ids.get(fname)
-            if pid and fname not in ("routeorder", "nextcollid", "collected"):
-                values.append((pid, value))
-        values.append((prop_ids["collected"], "Yes"))
+        values, _ = p.field_props(section,
+                                  exclude=("routeorder", "nextcollid", "collected"))
+        values.append((p.prop["collected"], "Yes"))
         if "collid" not in section["fields"]:
-            values.append((prop_ids["collid"], str(collid)))
-        add_props(item_id, values)
+            values.append((p.prop["collid"], str(collid)))
+        p.add_feature(f"✓ {collid}", section["digitized_coords"],
+                      MPZ_SEGMENT_LINE,
+                      description="Already collected — not part of the route",
+                      props=values)
 
-    # --- Bookkeeping tables --------------------------------------------------
-    con.executemany("INSERT INTO t_sequence(id, sequence) VALUES(?,?)",
-                    [(1, item_id + 1), (2, 10001),
-                     (3, 10001 + len(MPZ_PROPERTIES)),
-                     (4, 10001), (5, 10001), (6, 10001)])
-    con.execute("INSERT INTO t_version(version, previous, update_date) VALUES(?,?,?)",
-                (MPZ_DB_VERSION, None, now))
-    con.execute("INSERT INTO t_metadata(name, value, update_date) VALUES(?,?,?)",
-                ("version", MPZ_DB_VERSION, now))
-    con.commit()
-    con.close()
+    return p.close()
 
-    with zipfile.ZipFile(filename, "w", zipfile.ZIP_DEFLATED) as z:
-        z.write(db_path, "data.sdb")
-        z.writestr(".com.miocool.mapplus.metadata/metadata.xml", MPZ_METADATA_XML)
-    os.remove(db_path)
-    return filename
+
+def write_segments_mpz(sections, filename, title, day_of=None):
+    """Write a plain (unrouted) segment collection as a Map Plus project.
+
+    Used by the daily planner for its updated segment files. `day_of` maps
+    id(section) -> planned day number: those segments get ScheduledDay set.
+    Sections whose 'scheduled' flag is on are written Scheduled=Yes (locked
+    into an earlier day - a re-run of the planner skips them), and collected
+    sections keep Collected=Yes; both fade on the map.
+    """
+    day_of = day_of or {}
+    n_locked = sum(1 for s in sections if s["scheduled"])
+    n_collected = sum(1 for s in sections if s["collected"])
+    description = f"{len(sections)} segments"
+    if day_of:
+        description += f" | {len(day_of)} in the current multi-day plan"
+    if n_locked:
+        description += f" | {n_locked} locked into earlier days"
+    if n_collected:
+        description += f" | {n_collected} collected"
+    p = _MpzProject(filename, title, description)
+
+    for section in sections:
+        collid = section["collid"] or section["name"]
+        values, seen = p.field_props(
+            section, exclude=("routeorder", "nextcollid", "scheduled",
+                              "scheduledday"))
+        if "collid" not in seen:
+            values.append((p.prop["collid"], str(collid)))
+        if "collected" not in seen:
+            values.append((p.prop["collected"],
+                           "Yes" if section["collected"] else "No"))
+        name = str(collid)
+        desc = None
+        day = day_of.get(id(section))
+        if section["collected"]:
+            name = f"✓ {collid}"
+            desc = "Already collected"
+        elif section["scheduled"]:
+            name = f"◷ {collid}"
+            values.append((p.prop["scheduled"], "Yes"))
+            desc = "Locked into an earlier day's route"
+        elif day is not None:
+            name = f"Day {day} · {collid}"
+            values.append((p.prop["scheduledday"], str(day)))
+            desc = f"Planned for day {day}"
+        p.add_feature(name, section["digitized_coords"], MPZ_SEGMENT_LINE,
+                      description=desc, props=values)
+
+    return p.close()
 
 
 def write_html(route, legs, total, filename, collected_sections=()):
@@ -1360,7 +1546,7 @@ map.fitBounds(line.getBounds().pad(0.05));
 
 def plan_route(input_path, use_osm=True, start=None, output_gpx="survey_route.gpx",
                output_html="route_preview.html", output_mpz="survey_route.mpz",
-               cache_file=OVERPASS_CACHE_FILE, log=print, step=None, progress=None):
+               cache_dir=OVERPASS_CACHE_DIR, log=print, step=None, progress=None):
     """Full pipeline: KML/MPZ -> optimized route -> GPX + HTML + MPZ. Returns results dict."""
     t0 = time.time()
 
@@ -1386,11 +1572,13 @@ def plan_route(input_path, use_osm=True, start=None, output_gpx="survey_route.gp
     stage(2, "Fetching OSM road network..." if use_osm else "Skipping OSM (offline mode)")
     osm_ways = []
     if use_osm:
-        lats = [lat for s in sections for lat, _ in (s["start"], s["end"])]
-        lons = [lon for s in sections for _, lon in (s["start"], s["end"])]
-        pad = 0.01
-        bbox = (min(lats) - pad, min(lons) - pad, max(lats) + pad, max(lons) + pad)
-        osm_ways = fetch_osm_ways(bbox, cache_file=cache_file, log=log)
+        points = [pt for s in sections for pt in s["coords"]]
+        osm_ways = fetch_osm_ways(points, cache_dir=cache_dir, log=log)
+        if not osm_ways:
+            raise RuntimeError(
+                "No OSM road data was found for the survey area; transfers "
+                "between segments could not be kept on roads. Re-run to "
+                "retry, or pass --no-osm to accept straight-line transfers.")
         apply_osm_speeds(sections, osm_ways, log=log)
 
     stage(3, "Chaining contiguous sections...")
