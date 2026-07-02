@@ -3,15 +3,20 @@
 Survey Route Planner
 ====================
 
-Plans an efficient driving route that covers every road section in a KML file
-(e.g. MapPlus/Duweis roadway-survey exports), then writes a mobile-friendly
-GPX track, an interactive HTML map preview, and a Map Plus project (.mpz)
-where every section is its own numbered, tappable feature that keeps its
-CollId — so in the field you can follow the route segment by segment.
+Plans an efficient driving route that covers every road section in a KML or
+Map Plus project (.mpz) file (e.g. MapPlus/Duweis roadway-survey exports),
+then writes a mobile-friendly GPX track, an interactive HTML map preview,
+and a Map Plus project (.mpz) where every section is its own numbered,
+tappable feature that keeps its CollId — so in the field you can follow the
+route segment by segment. Output segments use the same color language as the
+state-issued files: BLUE (Dir=I) means drive with the digitized arrows, PINK
+(Dir=D) means drive against them. Segments already marked Collected=Yes in
+the input are excluded from the route and carried through faded.
 
 How it works
 ------------
-1. Parse the KML into required road sections (direction-aware).
+1. Parse the KML/MPZ into required road sections (direction-aware);
+   already-collected sections are set aside.
 2. Merge endpoints that are within a few meters of each other.
 3. Chain sections that run end-to-start into single continuous runs, so
    "chopped" road sections are driven in one pass and the solver has far
@@ -21,11 +26,15 @@ How it works
 5. Greedy nearest-section ordering: from the current position, a single
    Dijkstra search runs only until it touches the closest remaining section
    (zero cost when the next section starts where the last one ended).
+   Transfers always follow roads: if no legal directed path exists the
+   search retries ignoring one-way restrictions before ever considering a
+   straight-line jump (which can only happen with no OSM data at all).
 
 Usage
 -----
     python Route_Planner.py                      # GUI (requires PyQt6)
     python Route_Planner.py sections.kml         # headless CLI
+    python Route_Planner.py region.mpz           # Map Plus project input
     python Route_Planner.py sections.kml --no-osm --gpx out.gpx --mpz out.mpz
 
 Dependencies: none required. Optional: requests (OSM data), PyQt6 (GUI).
@@ -39,6 +48,7 @@ import re
 import sqlite3
 import struct
 import sys
+import tempfile
 import time
 import uuid
 import webbrowser
@@ -142,14 +152,66 @@ def _extract_extended_data(placemark):
     return fields
 
 
-def parse_kml(kml_path, log=print):
-    """Parse a KML file into a list of section dicts.
+def _build_section(coords, fields, name):
+    """Build a section dict from geometry plus metadata fields.
 
-    Each section: {coords, start, end, length_m, oneway, speed_limit, name}
+    Shared by the KML and MPZ parsers. `coords` may be reversed in place
+    (Dir == 'D' means the section must be driven opposite to its digitized
+    order); the untouched digitized geometry is kept for output so the map
+    shows the same pink/blue direction blobs as the source file.
+
     - oneway True  -> must and can only be driven in coords order
     - oneway False -> two-way, may be surveyed in either direction
     - oneway None  -> unspecified (treated as two-way)
     """
+    digitized_coords = list(coords)
+    digitized_reversed = False
+
+    oneway = None
+    dir_code = (fields.get("dir") or "").upper()
+    if dir_code:
+        if dir_code in ("B", "T", "BOTH"):
+            oneway = False
+        elif dir_code == "D":  # decreasing: drive opposite to digitized order
+            coords.reverse()
+            digitized_reversed = True
+            oneway = True
+        else:  # 'I', NB/SB/EB/WB, N/S/E/W ...
+            oneway = True
+    else:
+        for key in ("oneway", "one_way", "one-way", "is_one_way"):
+            value = fields.get(key, "").lower()
+            if value in ("yes", "true", "1", "y"):
+                oneway = True
+            elif value in ("no", "false", "0", "n"):
+                oneway = False
+
+    speed = None
+    for key in ("maxspeed", "speed_limit", "speedlimit", "speed"):
+        if key in fields:
+            speed = parse_speed_limit(fields[key])
+            if speed:
+                break
+
+    return {
+        "coords": coords,
+        "digitized_coords": digitized_coords,
+        "digitized_reversed": digitized_reversed,
+        "start": coords[0],
+        "end": coords[-1],
+        "length_m": path_length(coords),
+        "oneway": oneway,
+        "speed_limit": speed,
+        "name": name,
+        "collid": fields.get("collid"),
+        "dir_code": dir_code,
+        "collected": (fields.get("collected") or "").strip().lower().startswith("y"),
+        "fields": fields,
+    }
+
+
+def parse_kml(kml_path, log=print):
+    """Parse a KML file into a list of section dicts (see _build_section)."""
     tree = _parse_kml_tree(kml_path)
     sections = []
 
@@ -183,54 +245,112 @@ def parse_kml(kml_path, log=print):
         if route:
             name = f"{route} {name}"
 
-        # Direction: MapPlus 'Dir' field, else generic oneway flags.
-        oneway = None
-        dir_code = fields.get("dir", "").upper()
-        if dir_code:
-            if dir_code in ("B", "T", "BOTH"):
-                oneway = False
-            elif dir_code == "D":  # decreasing: drive opposite to digitized order
-                coords.reverse()
-                oneway = True
-            else:  # 'I', NB/SB/EB/WB, N/S/E/W ...
-                oneway = True
-        else:
-            for key in ("oneway", "one_way", "one-way", "is_one_way"):
-                value = fields.get(key, "").lower()
-                if value in ("yes", "true", "1", "y"):
-                    oneway = True
-                elif value in ("no", "false", "0", "n"):
-                    oneway = False
-
-        # Speed limit from metadata, description, or name.
-        speed = None
-        for key in ("maxspeed", "speed_limit", "speedlimit", "speed"):
-            if key in fields:
-                speed = parse_speed_limit(fields[key])
-                if speed:
-                    break
-        if not speed:
+        section = _build_section(coords, fields, name)
+        if not section["speed_limit"]:
             desc = pm.find(f"{KML_NS}description")
             if desc is not None and desc.text:
-                speed = parse_speed_limit(desc.text)
-
-        sections.append({
-            "coords": coords,
-            "start": coords[0],
-            "end": coords[-1],
-            "length_m": path_length(coords),
-            "oneway": oneway,
-            "speed_limit": speed,
-            "name": name,
-            "collid": fields.get("collid"),
-            "fields": fields,
-        })
+                section["speed_limit"] = parse_speed_limit(desc.text)
+        sections.append(section)
 
     if not sections:
         raise ValueError("No LineString sections found in KML file")
     log(f"  Parsed {len(sections)} road sections "
         f"({sum(s['length_m'] for s in sections) / 1000:.1f} km to survey)")
     return sections
+
+
+def _decode_mpz_shape(blob):
+    """Decode a Map Plus shape blob into [(lat, lon), ...] or None."""
+    if not blob or len(blob) < 12 or blob[:4] != b"\x01\x00\x01\x02":
+        return None
+    count = struct.unpack_from("<i", blob, 4)[0]
+    if count < 2 or len(blob) < 12 + count * 16:
+        return None
+    coords = []
+    for i in range(count):
+        lat, lon = struct.unpack_from("<dd", blob, 12 + i * 16)
+        pt = snap_coord(lat, lon)
+        if not coords or pt != coords[-1]:
+            coords.append(pt)
+    return coords if len(coords) >= 2 else None
+
+
+def parse_mpz(mpz_path, log=print):
+    """Parse a Map Plus project (.mpz) into a list of section dicts.
+
+    Reads every line feature with its properties (CollId, Dir, Collected, ...)
+    straight out of the project's SQLite database, so both the state-issued
+    region files and routes generated by this tool re-import cleanly.
+    Deadhead transfer features from previously generated routes are skipped.
+    """
+    with zipfile.ZipFile(mpz_path) as z:
+        names = z.namelist()
+        sdb = next((n for n in names if n.endswith("data.sdb")), None)
+        if sdb is None:
+            raise ValueError(f"{mpz_path} contains no data.sdb - not a Map Plus project")
+        with tempfile.NamedTemporaryFile(suffix=".sdb", delete=False) as tmp:
+            tmp.write(z.read(sdb))
+            db_path = tmp.name
+
+    sections = []
+    skipped_deadhead = 0
+    try:
+        con = sqlite3.connect(db_path)
+        prop_names = {pid: pname.strip().lower()
+                      for pid, pname in con.execute("SELECT id, name FROM t_property")
+                      if pname}
+
+        item_fields = defaultdict(dict)
+        for item_id, pid, value in con.execute(
+                "SELECT item_id, property_id, value FROM t_property_lkp"):
+            pname = prop_names.get(pid)
+            if pname is None or value is None:
+                continue
+            if isinstance(value, bytes):
+                try:
+                    value = value.decode("utf-8")
+                except UnicodeDecodeError:
+                    continue
+            value = str(value).strip()
+            if value:
+                item_fields[item_id][pname] = value
+
+        for item_id, item_name, blob in con.execute(
+                "SELECT i.id, i.name, s.coordinates FROM t_item i "
+                "JOIN t_shape s ON s.item_id = i.id "
+                "WHERE i.type = 3 ORDER BY i.id"):
+            coords = _decode_mpz_shape(blob)
+            if coords is None:
+                continue
+            fields = item_fields.get(item_id, {})
+            if fields.get("routename") == "Deadhead":
+                skipped_deadhead += 1
+                continue
+            name = fields.get("collid") or (item_name.strip() if item_name
+                                            else f"Section {len(sections) + 1}")
+            route = fields.get("routename")
+            if route:
+                name = f"{route} {name}"
+            sections.append(_build_section(coords, fields, name))
+        con.close()
+    finally:
+        os.remove(db_path)
+
+    if not sections:
+        raise ValueError("No line features found in the Map Plus project")
+    if skipped_deadhead:
+        log(f"  Ignored {skipped_deadhead} deadhead transfer features "
+            f"from a previously generated route")
+    log(f"  Parsed {len(sections)} road sections "
+        f"({sum(s['length_m'] for s in sections) / 1000:.1f} km to survey)")
+    return sections
+
+
+def parse_input(path, log=print):
+    """Parse a KML or Map Plus (.mpz) file into section dicts."""
+    if path.lower().endswith((".mpz", ".zip")):
+        return parse_mpz(path, log=log)
+    return parse_kml(path, log=log)
 
 
 # ============================================================================
@@ -500,6 +620,7 @@ class Graph:
         self.nodes = []
         self.adj = []  # node id -> {neighbor id: seconds}
         self.meters = []  # node id -> {neighbor id: meters}
+        self._undirected = None  # lazy (adj, meters) ignoring one-way
 
     def _ensure(self, node):
         idx = self.node_id.get(node)
@@ -516,6 +637,7 @@ class Graph:
         if seconds < self.adj[ia].get(ib, float("inf")):
             self.adj[ia][ib] = seconds
             self.meters[ia][ib] = dist_m
+            self._undirected = None
 
     def add_polyline(self, coords, speed_kmh, oneway):
         mps = speed_kmh * 1000.0 / 3600.0
@@ -525,12 +647,26 @@ class Graph:
             if not oneway:
                 self.add_edge(coords[i + 1], coords[i], d / mps, d)
 
-    def nearest_target(self, source, targets):
+    def _undirected_view(self):
+        """Adjacency with every edge usable both ways (last-resort routing)."""
+        if self._undirected is None:
+            adj = [dict(nbrs) for nbrs in self.adj]
+            meters = [dict(m) for m in self.meters]
+            for u, nbrs in enumerate(self.adj):
+                for v, w in nbrs.items():
+                    if w < adj[v].get(u, float("inf")):
+                        adj[v][u] = w
+                        meters[v][u] = self.meters[u][v]
+            self._undirected = (adj, meters)
+        return self._undirected
+
+    def nearest_target(self, source, targets, undirected=False):
         """Dijkstra from source, stopping at the first reached target node.
 
         Returns (target_id, seconds, meters, path_coords) or None. This is
         the hot path: when the next section starts at the current position
-        it returns immediately.
+        it returns immediately. With undirected=True one-way restrictions
+        are ignored, so any target on a connected road is reachable.
         """
         source_id = self.node_id.get(source)
         if source_id is None:
@@ -538,6 +674,8 @@ class Graph:
         if source_id in targets:
             return (source_id, 0.0, 0.0, [source])
 
+        adj, meters = (self._undirected_view() if undirected
+                       else (self.adj, self.meters))
         n = len(self.nodes)
         dist = [float("inf")] * n
         dist_m = [0.0] * n
@@ -557,8 +695,8 @@ class Graph:
                     steps += 1
                 path.reverse()
                 return (u, d, dist_m[u], path)
-            meters_u = self.meters[u]
-            for v, w in self.adj[u].items():
+            meters_u = meters[u]
+            for v, w in adj[u].items():
                 nd = d + w
                 if nd < dist[v]:
                     dist[v] = nd
@@ -568,8 +706,12 @@ class Graph:
         return None
 
 
-def build_graph(chains, osm_ways, log=print):
-    """Build the routing graph from survey chains plus OSM deadhead roads."""
+def build_graph(chains, osm_ways, collected_sections=(), log=print):
+    """Build the routing graph from survey chains plus OSM deadhead roads.
+
+    Already-collected sections are added too: they are real roads, so
+    transfers between the remaining segments may drive along them.
+    """
     graph = Graph()
 
     for chain in chains:
@@ -578,12 +720,19 @@ def build_graph(chains, osm_ways, log=print):
             speed = section["speed_limit"] or DEFAULT_SPEED_KMH
             graph.add_polyline(coords, speed, section["oneway"] is True)
 
+    for section in collected_sections:
+        speed = section["speed_limit"] or DEFAULT_SPEED_KMH
+        graph.add_polyline(section["coords"], speed, section["oneway"] is True)
+
     survey_nodes = len(graph.nodes)
     for way in osm_ways:
         graph.add_polyline(way["geometry"], way["speed_kmh"], way["oneway"])
 
     # Survey coordinates rarely coincide with OSM node coordinates, so link
-    # each chain endpoint to nearby OSM nodes or the two graphs stay disjoint.
+    # each chain endpoint to the nearest OSM node or the two graphs stay
+    # disjoint. Every endpoint gets a link (there is no distance cutoff, so
+    # transfers always follow roads); links longer than the usual snapping
+    # tolerance are only counted and reported.
     if len(graph.nodes) > survey_nodes:
         cell = OSM_LINK_TOLERANCE_M / 111320.0
         grid = defaultdict(list)
@@ -591,27 +740,41 @@ def build_graph(chains, osm_ways, log=print):
             lat, lon = graph.nodes[idx]
             grid[(int(lat / cell), int(lon / cell))].append(idx)
 
-        links = 0
+        far_links = 0
+        max_link_d = 0.0
         endpoints = set()
         for chain in chains:
             endpoints.add(chain["coords"][0])
             endpoints.add(chain["coords"][-1])
         for pt in endpoints:
             cx, cy = int(pt[0] / cell), int(pt[1] / cell)
-            best, best_d = None, OSM_LINK_TOLERANCE_M
+            best, best_d = None, float("inf")
             for dx in (-1, 0, 1):
                 for dy in (-1, 0, 1):
                     for idx in grid.get((cx + dx, cy + dy), ()):
                         d = haversine(pt, graph.nodes[idx])
                         if d < best_d:
                             best, best_d = idx, d
+            if best is None:
+                # Nothing within the grid neighborhood: brute-force the
+                # nearest OSM node so the endpoint is never left stranded.
+                for idx in range(survey_nodes, len(graph.nodes)):
+                    d = haversine(pt, graph.nodes[idx])
+                    if d < best_d:
+                        best, best_d = idx, d
             if best is not None:
                 osm_pt = graph.nodes[best]
                 seconds = best_d / (DEFAULT_SPEED_KMH * 1000.0 / 3600.0)
                 graph.add_edge(pt, osm_pt, seconds, best_d)
                 graph.add_edge(osm_pt, pt, seconds, best_d)
-                links += 1
-        log(f"  Linked {links}/{len(endpoints)} chain endpoints to the OSM network")
+                if best_d > OSM_LINK_TOLERANCE_M:
+                    far_links += 1
+                    max_link_d = max(max_link_d, best_d)
+        log(f"  Linked {len(endpoints)} chain endpoints to the OSM network")
+        if far_links:
+            log(f"  Note: {far_links} endpoints were more than "
+                f"{OSM_LINK_TOLERANCE_M:.0f} m from an OSM road "
+                f"(farthest {max_link_d:.0f} m)")
 
     log(f"  Graph: {len(graph.nodes):,} nodes")
     return graph
@@ -647,7 +810,7 @@ def solve_route(graph, chains, start=None, log=print, progress=None):
     route = []
     legs = []
     total = {"survey_m": 0.0, "deadhead_m": 0.0, "survey_s": 0.0,
-             "deadhead_s": 0.0, "jumps": 0}
+             "deadhead_s": 0.0, "jumps": 0, "wrong_way": 0}
 
     def extend(coords):
         if route and coords and route[-1] == coords[0]:
@@ -656,11 +819,19 @@ def solve_route(graph, chains, start=None, log=print, progress=None):
 
     while remaining:
         found = graph.nearest_target(current, targets)
+        if found is None:
+            # No legal directed path (one-way restrictions can strand a
+            # position). Retry ignoring one-way so the transfer still
+            # follows real roads instead of jumping cross-country.
+            found = graph.nearest_target(current, targets, undirected=True)
+            if found is not None:
+                total["wrong_way"] += 1
         if found is not None:
             target_id, dh_s, dh_m, dh_path = found
             ci, flipped = next((ci, fl) for ci, fl in entries[target_id] if ci in remaining)
         else:
-            # Unreachable by road: jump straight-line to the closest chain start.
+            # Truly disconnected road data (no OSM network available):
+            # jump straight-line to the closest chain start.
             ci, flipped = min(
                 ((ci, fl) for nid in targets for ci, fl in entries[nid] if ci in remaining),
                 key=lambda e: haversine(
@@ -702,9 +873,13 @@ def solve_route(graph, chains, start=None, log=print, progress=None):
         if progress:
             progress(len(chains) - len(remaining), len(chains))
 
+    if total["wrong_way"]:
+        log(f"  Note: {total['wrong_way']} transfers ignore one-way restrictions "
+            f"(no legal directed path existed); they still follow roads")
     if total["jumps"]:
-        log(f"  WARNING: {total['jumps']} chains had no road connection; "
-            f"straight-line jumps were used (check the map)")
+        log(f"  WARNING: {total['jumps']} chains had no road connection at all; "
+            f"straight-line jumps were used. Enable OSM data (don't pass "
+            f"--no-osm) to keep every transfer on real roads.")
     return route, legs, total
 
 
@@ -785,10 +960,16 @@ MPZ_PROPERTIES = [
     ("RouteOrder", 11, None), ("NextCollId", 1, None),
 ]
 
-# Style constants lifted from the reference (ARGB ints as decimal strings).
+# Style constants lifted from the reference (color ints as decimal strings).
+# The class default renders segments PINK (drive against the digitized
+# arrows, i.e. Dir=D); the [Dir]=="I" condition overrides to BLUE (drive
+# with the arrows) — exactly the color language of the state-issued files.
 MPZ_CLASS_STYLE = {211: "1694433535", 213: "6", 220: "1",
                    221: "[CollId]", 234: "1"}
-MPZ_SEGMENT_LINE = (1677753087, 3.0, 838892287)     # blue, like the reference
+MPZ_COLOR_DIR_I = "1694433280"           # blue: drive with the arrows
+MPZ_COLOR_PILOT = "1677721855"           # pilot segments (reference Condition 3)
+MPZ_COLOR_DIR_I_PILOT = "1694498560"     # pilot + Dir=I (reference Condition 4)
+MPZ_SEGMENT_LINE = (1677753087, 3.0, 838892287)     # per-shape line, like the reference
 MPZ_DEADHEAD_LINE = (1684300900, 2.0, 845440100)    # translucent gray
 MPZ_TABLE_SQL = [
     "CREATE TABLE t_sequence(    id       INTEGER  PRIMARY KEY,    sequence INTEGER)",
@@ -894,8 +1075,15 @@ def _mpz_coords_blob(coords):
             + b"".join(struct.pack("<dd", lat, lon) for lat, lon in coords))
 
 
-def write_mpz(visits, total, filename, title="Survey Route"):
-    """Write the planned route as a Map Plus project archive (.mpz)."""
+def write_mpz(visits, total, filename, title="Survey Route", collected_sections=()):
+    """Write the planned route as a Map Plus project archive (.mpz).
+
+    Segments keep their original digitized geometry, so Map Plus draws the
+    direction arrows exactly like the source file, and the Dir property is
+    written to match the drive: I (blue, drive with the arrows) or D (pink,
+    drive against them). Sections already collected in the input are included
+    with Collected=Yes — they fade out and are not part of the route order.
+    """
     now = time.time()
     guid_base = uuid.uuid4().hex[:10].upper()
     guid_n = 0
@@ -951,25 +1139,37 @@ def write_mpz(visits, total, filename, title="Survey Route"):
     add_props(fc_id, [(2, None)] + [(pid, None) for pid in
                                     sorted(prop_ids.values())])
 
-    # Conditional display rules (type 2002), same mechanism as the reference:
-    # gray out deadhead transfers; fade segments once Collected is set to Yes.
-    add_item(10002, fc_id, 1, 2002, "Deadhead")
-    add_props(10002, [(600, '[RouteName]=="Deadhead"')])
-    add_styles(10002, {210: "2", 211: str(MPZ_DEADHEAD_LINE[0]), 212: "0.5"})
-    add_item(10003, fc_id, 2, 2002, "Collected")
-    add_props(10003, [(600, '[Collected].beginswith("Y")')])
-    add_styles(10003, {210: "2", 211: "1677721600", 212: "0.2972973",
-                       220: "0", 234: "0"})
+    # Conditional display rules (type 2002), copied from the reference files:
+    # segments are pink by default (drive against the digitized arrows) and
+    # blue when Dir=I (drive with the arrows); pilot segments recolor; then
+    # deadhead transfers gray out and Collected=Yes segments fade.
+    conditions = [
+        ("Direction I", '[Dir]=="I"', {211: MPZ_COLOR_DIR_I}),
+        ("Pilot", '[IsPilot].beginswith("Y")', {211: MPZ_COLOR_PILOT}),
+        ("Pilot Direction I", '[Dir]=="I"&&[IsPilot].beginswith("Y")',
+         {211: MPZ_COLOR_DIR_I_PILOT}),
+        ("Deadhead", '[RouteName]=="Deadhead"',
+         {210: "2", 211: str(MPZ_DEADHEAD_LINE[0]), 212: "0.5"}),
+        ("Collected", '[Collected].beginswith("Y")',
+         {210: "2", 211: "1677721600", 212: "0.2972973", 220: "0", 234: "0"}),
+    ]
+    for ci, (cname, rule, styles) in enumerate(conditions, start=1):
+        cond_id = fc_id + ci
+        add_item(cond_id, fc_id, ci, 2002, cname)
+        add_props(cond_id, [(600, rule)])
+        add_styles(cond_id, styles)
 
     # --- Feature collection (type 70) holding one feature per visit ---------
-    coll_id = 10004
+    coll_id = fc_id + len(conditions) + 1
     survey_km = total["survey_m"] / 1000
     deadhead_km = total["deadhead_m"] / 1000
     hours = (total["survey_s"] + total["deadhead_s"]) / 3600
-    add_item(coll_id, 1, 2, 70, title,
-             description=f"{len(visits)} segments in driving order | "
-                         f"{survey_km:.1f} km survey + {deadhead_km:.1f} km "
-                         f"deadhead | est. {hours:.1f} h",
+    description = (f"{len(visits)} segments in driving order | "
+                   f"{survey_km:.1f} km survey + {deadhead_km:.1f} km "
+                   f"deadhead | est. {hours:.1f} h")
+    if collected_sections:
+        description += f" | {len(collected_sections)} already collected"
+    add_item(coll_id, 1, 2, 70, title, description=description,
              feature_class_id=fc_id, show_on_map=1, display_mode=0, subtype=2)
     add_props(coll_id, [(700, struct.pack("<i", 0)), (701, struct.pack("<i", 25)),
                         (702, struct.pack("<i", 0))])
@@ -1009,23 +1209,30 @@ def write_mpz(visits, total, filename, title="Survey Route"):
 
         item_id += 1
         order_idx += 1
+        # Drive direction relative to the digitized arrows decides the color:
+        # with the arrows -> Dir=I (blue); against them -> Dir=D (pink).
+        against_arrows = visit["reversed"] != section["digitized_reversed"]
+        dir_out = "D" if against_arrows else "I"
         desc = (f"Run {visit['order']} of {len(visits)} | "
                 f"{section['length_m'] / 1000:.2f} km | ETA +{visit['eta_s'] / 3600:.1f} h")
-        if visit["reversed"]:
-            desc += " | drive opposite to digitized direction"
+        desc += (" | PINK: drive AGAINST the arrows" if against_arrows
+                 else " | BLUE: drive WITH the arrows")
+        if section["dir_code"] not in ("", "I", "D") and section["dir_code"] != dir_out:
+            desc += f" | original Dir: {section['dir_code']}"
         if next_collid is not None:
             desc += f" | next: CollId {next_collid}"
         add_item(item_id, coll_id, order_idx, 3, f"{label} · {collid}",
                  description=desc, feature_class_id=fc_id, display_mode=1)
-        add_shape(item_id, section["coords"], MPZ_SEGMENT_LINE)
+        add_shape(item_id, section["digitized_coords"], MPZ_SEGMENT_LINE)
 
         values = [(2, section["fields"].get("routename"))]
         seen = set()
         for fname, value in section["fields"].items():
             pid = prop_ids.get(fname)
-            if pid and fname not in ("routeorder", "nextcollid"):
+            if pid and fname not in ("routeorder", "nextcollid", "dir"):
                 values.append((pid, value))
                 seen.add(fname)
+        values.append((prop_ids["dir"], dir_out))
         if "collid" not in seen:
             values.append((prop_ids["collid"], str(collid)))
         if "collected" not in seen:
@@ -1033,6 +1240,26 @@ def write_mpz(visits, total, filename, title="Survey Route"):
         values.append((prop_ids["routeorder"], str(visit["order"])))
         values.append((prop_ids["nextcollid"],
                        str(next_collid) if next_collid is not None else None))
+        add_props(item_id, values)
+
+    # Already-collected sections ride along unrouted: original geometry and
+    # fields, forced Collected=Yes so the fade condition applies on the map.
+    for section in collected_sections:
+        collid = section["collid"] or section["name"]
+        item_id += 1
+        order_idx += 1
+        add_item(item_id, coll_id, order_idx, 3, f"✓ {collid}",
+                 description="Already collected — not part of the route",
+                 feature_class_id=fc_id, display_mode=1)
+        add_shape(item_id, section["digitized_coords"], MPZ_SEGMENT_LINE)
+        values = [(2, section["fields"].get("routename"))]
+        for fname, value in section["fields"].items():
+            pid = prop_ids.get(fname)
+            if pid and fname not in ("routeorder", "nextcollid", "collected"):
+                values.append((pid, value))
+        values.append((prop_ids["collected"], "Yes"))
+        if "collid" not in section["fields"]:
+            values.append((prop_ids["collid"], str(collid)))
         add_props(item_id, values)
 
     # --- Bookkeeping tables --------------------------------------------------
@@ -1054,7 +1281,7 @@ def write_mpz(visits, total, filename, title="Survey Route"):
     return filename
 
 
-def write_html(route, legs, total, filename):
+def write_html(route, legs, total, filename, collected_sections=()):
     """Write an interactive Leaflet map preview of the route."""
     waypoints = []
     for i, leg in enumerate(legs):
@@ -1065,6 +1292,8 @@ def write_html(route, legs, total, filename):
                                   f"{leg['time_s'] / 60:.0f} min"})
     data = {
         "route": [[lat, lon] for lat, lon in route],
+        "collected": [[[lat, lon] for lat, lon in s["digitized_coords"]]
+                      for s in collected_sections],
         "waypoints": waypoints,
         "stats": {
             "km": (total["survey_m"] + total["deadhead_m"]) / 1000,
@@ -1072,6 +1301,7 @@ def write_html(route, legs, total, filename):
             "deadhead_km": total["deadhead_m"] / 1000,
             "hours": (total["survey_s"] + total["deadhead_s"]) / 3600,
             "runs": len(legs),
+            "collected": len(collected_sections),
         },
     }
 
@@ -1091,7 +1321,7 @@ def write_html(route, legs, total, filename):
  <b>Survey Route</b><br>
  Total: <b>__KM__ km</b> (~__H__ h)<br>
  Survey: __SKM__ km | Deadhead: __DKM__ km<br>
- Runs: __RUNS__
+ Runs: __RUNS__ | Already collected: __COLLECTED__
 </div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
@@ -1099,6 +1329,9 @@ const data = __DATA__;
 const map = L.map('map');
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
             {maxZoom: 19, attribution: '&copy; OpenStreetMap'}).addTo(map);
+data.collected.forEach(c => L.polyline(c,
+  {color: '#888', weight: 2, opacity: .45, dashArray: '4 6'})
+  .bindPopup('Already collected').addTo(map));
 const line = L.polyline(data.route, {color: '#0066ff', weight: 3, opacity: .8}).addTo(map);
 data.waypoints.forEach(w => L.circleMarker([w.lat, w.lon],
   {radius: 5, color: '#d00', fillColor: '#ff5252', fillOpacity: .9})
@@ -1114,7 +1347,8 @@ map.fitBounds(line.getBounds().pad(0.05));
                 .replace("__H__", f"{data['stats']['hours']:.1f}")
                 .replace("__SKM__", f"{data['stats']['survey_km']:.1f}")
                 .replace("__DKM__", f"{data['stats']['deadhead_km']:.1f}")
-                .replace("__RUNS__", str(data["stats"]["runs"])))
+                .replace("__RUNS__", str(data["stats"]["runs"]))
+                .replace("__COLLECTED__", str(data["stats"]["collected"])))
     with open(filename, "w", encoding="utf-8") as f:
         f.write(html)
     return filename
@@ -1124,10 +1358,10 @@ map.fitBounds(line.getBounds().pad(0.05));
 # Pipeline
 # ============================================================================
 
-def plan_route(kml_path, use_osm=True, start=None, output_gpx="survey_route.gpx",
+def plan_route(input_path, use_osm=True, start=None, output_gpx="survey_route.gpx",
                output_html="route_preview.html", output_mpz="survey_route.mpz",
                cache_file=OVERPASS_CACHE_FILE, log=print, step=None, progress=None):
-    """Full pipeline: KML -> optimized route -> GPX + HTML + MPZ. Returns results dict."""
+    """Full pipeline: KML/MPZ -> optimized route -> GPX + HTML + MPZ. Returns results dict."""
     t0 = time.time()
 
     def stage(n, msg):
@@ -1135,9 +1369,19 @@ def plan_route(kml_path, use_osm=True, start=None, output_gpx="survey_route.gpx"
         if step:
             step(n)
 
-    stage(1, "Parsing KML...")
-    sections = parse_kml(kml_path, log=log)
+    stage(1, "Parsing input...")
+    sections = parse_input(input_path, log=log)
     merge_endpoints(sections, log=log)
+
+    # Segments already marked Collected stay out of the route but ride along
+    # in the outputs (faded) and remain usable as roads for transfers.
+    collected = [s for s in sections if s["collected"]]
+    todo = [s for s in sections if not s["collected"]]
+    if collected:
+        log(f"  {len(collected)} segments already collected - "
+            f"routing the remaining {len(todo)}")
+    if not todo:
+        raise ValueError("Every segment is already marked Collected - nothing to route")
 
     stage(2, "Fetching OSM road network..." if use_osm else "Skipping OSM (offline mode)")
     osm_ways = []
@@ -1150,21 +1394,21 @@ def plan_route(kml_path, use_osm=True, start=None, output_gpx="survey_route.gpx"
         apply_osm_speeds(sections, osm_ways, log=log)
 
     stage(3, "Chaining contiguous sections...")
-    chains = chain_sections(sections, log=log)
+    chains = chain_sections(todo, log=log)
 
     stage(4, "Building graph and solving route...")
-    graph = build_graph(chains, osm_ways, log=log)
+    graph = build_graph(chains, osm_ways, collected_sections=collected, log=log)
     route, legs, total = solve_route(graph, chains, start=start, log=log, progress=progress)
 
     stage(5, "Writing outputs...")
     write_gpx(route, legs, total, output_gpx)
-    write_html(route, legs, total, output_html)
+    write_html(route, legs, total, output_html, collected_sections=collected)
     log(f"  GPX: {output_gpx}")
     log(f"  Map: {output_html}")
     if output_mpz:
         visits = build_visits(chains, legs)
-        title = os.path.splitext(os.path.basename(kml_path))[0] + "_route"
-        write_mpz(visits, total, output_mpz, title=title)
+        title = os.path.splitext(os.path.basename(input_path))[0] + "_route"
+        write_mpz(visits, total, output_mpz, title=title, collected_sections=collected)
         log(f"  MPZ: {output_mpz} ({len(visits)} ordered segments for Map Plus)")
 
     km = (total["survey_m"] + total["deadhead_m"]) / 1000
@@ -1178,7 +1422,8 @@ def plan_route(kml_path, use_osm=True, start=None, output_gpx="survey_route.gpx"
             "total_m": total["survey_m"] + total["deadhead_m"],
             "total_s": total["survey_s"] + total["deadhead_s"],
             "survey_m": total["survey_m"], "deadhead_m": total["deadhead_m"],
-            "sections": len(sections), "runs": len(chains), "jumps": total["jumps"]}
+            "sections": len(todo), "collected": len(collected),
+            "runs": len(chains), "jumps": total["jumps"]}
 
 
 # ============================================================================
@@ -1208,7 +1453,7 @@ def run_gui():
         def run(self):
             try:
                 results = plan_route(
-                    self.params["kml"],
+                    self.params["input"],
                     use_osm=self.params["use_osm"],
                     output_gpx=self.params["gpx"],
                     output_html=self.params["html"],
@@ -1238,10 +1483,11 @@ def run_gui():
 
             row = QHBoxLayout()
             self.kml_edit = QLineEdit()
-            self.kml_edit.setPlaceholderText("Select the KML file with your road sections...")
+            self.kml_edit.setPlaceholderText(
+                "Select the KML or Map Plus (.mpz) file with your road sections...")
             browse = QPushButton("Browse…")
             browse.clicked.connect(self.browse)
-            row.addWidget(QLabel("KML:"))
+            row.addWidget(QLabel("Input:"))
             row.addWidget(self.kml_edit, 1)
             row.addWidget(browse)
             layout.addLayout(row)
@@ -1296,8 +1542,10 @@ def run_gui():
             layout.addLayout(btns)
 
         def browse(self):
-            path, _ = QFileDialog.getOpenFileName(self, "Select KML File", "",
-                                                  "KML Files (*.kml);;All Files (*)")
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Select Input File", "",
+                "Map data (*.kml *.mpz);;KML Files (*.kml);;"
+                "Map Plus Projects (*.mpz);;All Files (*)")
             if path:
                 self.kml_edit.setText(path)
 
@@ -1306,9 +1554,10 @@ def run_gui():
             self.log_box.moveCursor(QTextCursor.MoveOperation.End)
 
         def start(self):
-            kml = self.kml_edit.text().strip()
-            if not kml or not os.path.exists(kml):
-                QMessageBox.warning(self, "No input", "Please select an existing KML file.")
+            path = self.kml_edit.text().strip()
+            if not path or not os.path.exists(path):
+                QMessageBox.warning(self, "No input",
+                                    "Please select an existing KML or .mpz file.")
                 return
             self.run_btn.setEnabled(False)
             self.gpx_btn.setEnabled(False)
@@ -1317,7 +1566,7 @@ def run_gui():
             self.bar.setValue(0)
             self.solve_bar.setVisible(False)
             self.worker = Worker({
-                "kml": kml,
+                "input": path,
                 "use_osm": self.osm_check.isChecked(),
                 "gpx": self.gpx_edit.text().strip() or "survey_route.gpx",
                 "html": self.html_edit.text().strip() or "route_preview.html",
@@ -1341,12 +1590,13 @@ def run_gui():
             self.gpx_btn.setEnabled(True)
             self.map_btn.setEnabled(True)
             self.bar.setValue(5)
-            QMessageBox.information(
-                self, "Route ready",
-                f"Total: {results['total_m'] / 1000:.1f} km "
-                f"(deadhead {results['deadhead_m'] / 1000:.1f} km)\n"
-                f"Estimated driving time: {results['total_s'] / 3600:.1f} h\n"
-                f"{results['sections']} sections in {results['runs']} continuous runs")
+            msg = (f"Total: {results['total_m'] / 1000:.1f} km "
+                   f"(deadhead {results['deadhead_m'] / 1000:.1f} km)\n"
+                   f"Estimated driving time: {results['total_s'] / 3600:.1f} h\n"
+                   f"{results['sections']} sections in {results['runs']} continuous runs")
+            if results.get("collected"):
+                msg += f"\n{results['collected']} segments already collected (skipped)"
+            QMessageBox.information(self, "Route ready", msg)
 
         def on_failed(self, msg):
             self.run_btn.setEnabled(True)
@@ -1375,8 +1625,10 @@ def run_gui():
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Plan an efficient survey driving route from a KML file.")
-    parser.add_argument("kml", nargs="?", help="KML file (omit to launch the GUI)")
+        description="Plan an efficient survey driving route from a KML or "
+                    "Map Plus (.mpz) file.")
+    parser.add_argument("input", nargs="?", metavar="KML_OR_MPZ",
+                        help="KML or Map Plus (.mpz) file (omit to launch the GUI)")
     parser.add_argument("--gpx", default="survey_route.gpx", help="output GPX file")
     parser.add_argument("--html", default="route_preview.html", help="output HTML map")
     parser.add_argument("--mpz", default="survey_route.mpz",
@@ -1387,12 +1639,12 @@ def main():
                         help="start position, e.g. 40.44,-79.99")
     args = parser.parse_args()
 
-    if args.kml is None:
+    if args.input is None:
         try:
             run_gui()
         except ImportError:
-            parser.error("PyQt6 is not installed - pass a KML file to run headless, "
-                         "or `pip install PyQt6` for the GUI")
+            parser.error("PyQt6 is not installed - pass a KML/.mpz file to run "
+                         "headless, or `pip install PyQt6` for the GUI")
         return
 
     start = None
@@ -1403,7 +1655,7 @@ def main():
         except ValueError:
             parser.error("--start must be LAT,LON")
 
-    plan_route(args.kml, use_osm=not args.no_osm, start=start,
+    plan_route(args.input, use_osm=not args.no_osm, start=start,
                output_gpx=args.gpx, output_html=args.html, output_mpz=args.mpz)
 
 
