@@ -21,8 +21,10 @@ How it works
 3. Chain sections that run end-to-start into single continuous runs, so
    "chopped" road sections are driven in one pass and the solver has far
    fewer pieces to order.
-4. Optionally fetch the surrounding OSM road network once (cached) for
-   realistic deadhead routing and speed limits.
+4. Fetch the surrounding OSM road network (tiled, cached, with failover
+   across Overpass servers) for realistic deadhead routing and speed
+   limits. If the network can't be fetched, planning stops with an error
+   instead of producing a route with off-road jumps (--no-osm opts out).
 5. Greedy nearest-section ordering: from the current position, a single
    Dijkstra search runs only until it touches the closest remaining section
    (zero cost when the next section starts where the last one ended).
@@ -55,7 +57,7 @@ import webbrowser
 import zipfile
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from math import asin, cos, radians, sin, sqrt
+from math import asin, cos, floor, radians, sin, sqrt
 from xml.etree import ElementTree as ET
 from xml.sax.saxutils import escape
 
@@ -63,8 +65,21 @@ KML_NS = "{http://www.opengis.net/kml/2.2}"
 DEFAULT_SPEED_KMH = 30.0
 ENDPOINT_MERGE_TOLERANCE_M = 15.0
 OSM_LINK_TOLERANCE_M = 50.0
-OVERPASS_URL = "https://overpass-api.de/api/interpreter"
-OVERPASS_CACHE_FILE = "overpass_cache.json"
+# Multiple Overpass servers: the primary is often busy, and losing the road
+# network means transfers can't follow roads, so failover matters.
+OVERPASS_URLS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
+]
+OVERPASS_CACHE_DIR = "overpass_cache"
+# Survey areas can span hundreds of km; one Overpass query for the whole
+# bounding box fails on anything big, so the area is fetched in small tiles.
+OSM_TILE_DEG = 0.25
+# Ways that can never be driven; filtered server-side to shrink downloads.
+OSM_EXCLUDED_HIGHWAYS = ("footway|path|cycleway|steps|pedestrian|bridleway|"
+                         "corridor|platform|proposed|construction|abandoned|"
+                         "razed|raceway|escape|busway")
 
 # Fallback speeds (km/h) by OSM highway classification.
 HIGHWAY_SPEEDS = {
@@ -506,76 +521,128 @@ def chain_sections(sections, log=print):
 # OSM road network (optional, cached)
 # ============================================================================
 
-def fetch_osm_ways(bbox, cache_file=OVERPASS_CACHE_FILE, timeout=90, log=print):
-    """Fetch all roads in bbox from Overpass, with a persistent JSON cache.
+def _overpass_query(query, timeout, log):
+    """POST a query to Overpass, rotating through mirrors with backoff.
 
-    Returns a list of {geometry: [(lat, lon)...], speed_kmh, oneway} dicts,
-    or [] if the network/dependency is unavailable.
+    Returns the element list, or raises RuntimeError once every server has
+    failed repeatedly - the road network is required to keep transfers on
+    roads, so a failed fetch must not be ignored.
     """
-    min_lat, min_lon, max_lat, max_lon = bbox
-    cache_key = f"{min_lat:.4f},{min_lon:.4f},{max_lat:.4f},{max_lon:.4f}"
+    import requests
+    last_err = None
+    for attempt in range(3):
+        if attempt:
+            time.sleep(2 ** attempt)
+        for url in OVERPASS_URLS:
+            try:
+                resp = requests.post(url, data={"data": query}, timeout=timeout,
+                                     headers={"User-Agent": "SurveyRoutePlanner/1.0"})
+                resp.raise_for_status()
+                return resp.json().get("elements", [])
+            except Exception as e:
+                last_err = e
+                log(f"    {url.split('/')[2]}: {e}")
+    raise RuntimeError(f"All Overpass servers failed after retries: {last_err}")
 
-    cache = {}
-    if os.path.exists(cache_file):
-        try:
-            with open(cache_file) as f:
-                cache = json.load(f)
-        except (OSError, ValueError):
-            cache = {}
-    if cache_key in cache:
-        log(f"  Using cached OSM data ({len(cache[cache_key])} ways)")
-        return [
-            {"geometry": [tuple(pt) for pt in w["geometry"]],
-             "speed_kmh": w["speed_kmh"], "oneway": w["oneway"]}
-            for w in cache[cache_key]
-        ]
 
-    try:
-        import requests
-    except ImportError:
-        log("  'requests' not installed - skipping OSM data")
-        return []
-
-    query = (f'[out:json][timeout:{timeout}];'
-             f'way["highway"]({min_lat},{min_lon},{max_lat},{max_lon});out geom;')
-    try:
-        log("  Querying Overpass API for the road network...")
-        resp = requests.post(OVERPASS_URL, data={"data": query}, timeout=timeout,
-                             headers={"User-Agent": "SurveyRoutePlanner/1.0"})
-        resp.raise_for_status()
-        elements = resp.json().get("elements", [])
-    except Exception as e:
-        log(f"  OSM fetch failed ({e}) - continuing with survey sections only")
-        return []
-
+def _ways_from_elements(elements):
+    """Convert Overpass elements to {id, geometry, speed_kmh, oneway} dicts."""
     ways = []
     for el in elements:
         geometry = el.get("geometry") or []
         if el.get("type") != "way" or len(geometry) < 2:
             continue
         tags = el.get("tags", {})
-        if tags.get("highway") in ("footway", "path", "cycleway", "steps", "pedestrian"):
-            continue
         speed = parse_speed_limit(tags.get("maxspeed", ""))
         if not speed:
             speed = HIGHWAY_SPEEDS.get(tags.get("highway"), DEFAULT_SPEED_KMH)
         ways.append({
+            "id": el.get("id"),
             "geometry": [snap_coord(pt["lat"], pt["lon"]) for pt in geometry],
             "speed_kmh": speed,
             "oneway": tags.get("oneway", "no").lower() in ("yes", "true", "1", "-1"),
         })
+    return ways
 
-    cache[cache_key] = [
-        {"geometry": [list(pt) for pt in w["geometry"]],
-         "speed_kmh": w["speed_kmh"], "oneway": w["oneway"]}
-        for w in ways
-    ]
+
+def fetch_osm_ways(points, cache_dir=OVERPASS_CACHE_DIR, timeout=120, log=print):
+    """Fetch the drivable road network covering all survey `points`.
+
+    The area is split into small tiles (survey regions can span hundreds of
+    km - a single Overpass query for the whole bounding box just times out).
+    Every tile touching a survey point, plus a one-tile ring around it for
+    connecting roads, is fetched with retry/failover and cached on disk one
+    file per tile, so a re-run only downloads what is missing.
+
+    Returns a list of {geometry: [(lat, lon)...], speed_kmh, oneway} dicts.
+    Raises RuntimeError if any tile cannot be fetched: without the full road
+    network, transfers between segments could not be kept on roads.
+    """
     try:
-        with open(cache_file, "w") as f:
-            json.dump(cache, f)
-    except OSError:
-        pass
-    log(f"  Fetched {len(ways)} OSM ways (cached for next run)")
+        import requests  # noqa: F401
+    except ImportError:
+        raise RuntimeError(
+            "The 'requests' package is required to download the OSM road "
+            "network (pip install requests), or pass --no-osm to accept "
+            "straight-line transfers.")
+
+    core = {(int(floor(lat / OSM_TILE_DEG)), int(floor(lon / OSM_TILE_DEG)))
+            for lat, lon in points}
+    tiles = sorted({(tx + dx, ty + dy) for tx, ty in core
+                    for dx in (-1, 0, 1) for dy in (-1, 0, 1)})
+    os.makedirs(cache_dir, exist_ok=True)
+
+    ways = []
+    seen_ids = set()
+
+    def add_ways(tile_ways):
+        for w in tile_ways:
+            wid = w.get("id")
+            if wid is not None:
+                if wid in seen_ids:
+                    continue
+                seen_ids.add(wid)
+            ways.append({"geometry": [tuple(pt) for pt in w["geometry"]],
+                         "speed_kmh": w["speed_kmh"], "oneway": w["oneway"]})
+
+    to_fetch = []
+    for tx, ty in tiles:
+        tile_file = os.path.join(cache_dir, f"tile_{tx}_{ty}.json")
+        if os.path.exists(tile_file):
+            try:
+                with open(tile_file) as f:
+                    add_ways(json.load(f)["ways"])
+                continue
+            except (OSError, ValueError, KeyError):
+                pass  # corrupt cache entry: refetch
+        to_fetch.append((tx, ty, tile_file))
+
+    if to_fetch:
+        log(f"  Downloading road network: {len(to_fetch)} of {len(tiles)} "
+            f"tiles not cached yet...")
+    else:
+        log(f"  Road network loaded from cache ({len(tiles)} tiles)")
+
+    for i, (tx, ty, tile_file) in enumerate(to_fetch, start=1):
+        s, w_, n, e = (tx * OSM_TILE_DEG, ty * OSM_TILE_DEG,
+                       (tx + 1) * OSM_TILE_DEG, (ty + 1) * OSM_TILE_DEG)
+        query = (f'[out:json][timeout:{timeout}];'
+                 f'way["highway"]["highway"!~"^({OSM_EXCLUDED_HIGHWAYS})$"]'
+                 f'["area"!="yes"]({s:.6f},{w_:.6f},{n:.6f},{e:.6f});out geom;')
+        log(f"  Tile {i}/{len(to_fetch)} ({tx},{ty})...")
+        tile_ways = _ways_from_elements(_overpass_query(query, timeout, log))
+        try:
+            with open(tile_file, "w") as f:
+                json.dump({"ways": [
+                    {"id": w["id"], "geometry": [list(pt) for pt in w["geometry"]],
+                     "speed_kmh": w["speed_kmh"], "oneway": w["oneway"]}
+                    for w in tile_ways
+                ]}, f)
+        except OSError:
+            pass
+        add_ways(tile_ways)
+
+    log(f"  Road network: {len(ways)} OSM ways across {len(tiles)} tiles")
     return ways
 
 
@@ -1360,7 +1427,7 @@ map.fitBounds(line.getBounds().pad(0.05));
 
 def plan_route(input_path, use_osm=True, start=None, output_gpx="survey_route.gpx",
                output_html="route_preview.html", output_mpz="survey_route.mpz",
-               cache_file=OVERPASS_CACHE_FILE, log=print, step=None, progress=None):
+               cache_dir=OVERPASS_CACHE_DIR, log=print, step=None, progress=None):
     """Full pipeline: KML/MPZ -> optimized route -> GPX + HTML + MPZ. Returns results dict."""
     t0 = time.time()
 
@@ -1386,11 +1453,13 @@ def plan_route(input_path, use_osm=True, start=None, output_gpx="survey_route.gp
     stage(2, "Fetching OSM road network..." if use_osm else "Skipping OSM (offline mode)")
     osm_ways = []
     if use_osm:
-        lats = [lat for s in sections for lat, _ in (s["start"], s["end"])]
-        lons = [lon for s in sections for _, lon in (s["start"], s["end"])]
-        pad = 0.01
-        bbox = (min(lats) - pad, min(lons) - pad, max(lats) + pad, max(lons) + pad)
-        osm_ways = fetch_osm_ways(bbox, cache_file=cache_file, log=log)
+        points = [pt for s in sections for pt in s["coords"]]
+        osm_ways = fetch_osm_ways(points, cache_dir=cache_dir, log=log)
+        if not osm_ways:
+            raise RuntimeError(
+                "No OSM road data was found for the survey area; transfers "
+                "between segments could not be kept on roads. Re-run to "
+                "retry, or pass --no-osm to accept straight-line transfers.")
         apply_osm_speeds(sections, osm_ways, log=log)
 
     stage(3, "Chaining contiguous sections...")

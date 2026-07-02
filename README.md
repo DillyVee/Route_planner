@@ -13,7 +13,7 @@ Everything lives in one file: `Route_Planner.py`.
 ## Install
 
 ```bash
-pip install -r requirements.txt   # requests (OSM data) + PyQt6 (GUI) — both optional
+pip install -r requirements.txt   # requests (OSM data; needed unless --no-osm) + PyQt6 (GUI)
 ```
 
 ## Usage
@@ -36,9 +36,13 @@ Try it: `python Route_Planner.py sample.kml --no-osm`
    state chopped apart reconnect.
 3. **Chain sections** — sections that run end-to-start are joined into single
    continuous runs (driven in one pass, and far fewer pieces to order).
-4. **OSM network (optional, cached)** — one Overpass query supplies connecting
-   roads for deadhead routing and fills in missing speed limits. Chain
-   endpoints are linked to the nearest OSM nodes so the two networks connect.
+4. **OSM network (cached)** — the survey area is fetched from Overpass in
+   small tiles (large regions can't be fetched in one query), with retries
+   across several Overpass servers. Tiles are cached on disk in
+   `overpass_cache/`, so only the first run downloads. If the road network
+   can't be fetched the planner stops with an error rather than producing a
+   route with off-road jumps. Chain endpoints are linked to the nearest OSM
+   nodes so the two networks connect, and missing speed limits are filled in.
 5. **Solve** — greedy nearest-section ordering. Each step is a single Dijkstra
    search that stops the moment it reaches the closest remaining section, so
    back-to-back sections cost nothing to connect. Two-way runs can be entered
