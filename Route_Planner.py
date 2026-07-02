@@ -521,16 +521,16 @@ def chain_sections(sections, log=print):
 # OSM road network (optional, cached)
 # ============================================================================
 
-def _overpass_query(query, timeout, log):
+def _overpass_query(query, timeout, log, attempts=1):
     """POST a query to Overpass, rotating through mirrors with backoff.
 
     Returns the element list, or raises RuntimeError once every server has
-    failed repeatedly - the road network is required to keep transfers on
-    roads, so a failed fetch must not be ignored.
+    failed `attempts` times - the road network is required to keep transfers
+    on roads, so a failed fetch must not be ignored.
     """
     import requests
     last_err = None
-    for attempt in range(3):
+    for attempt in range(attempts):
         if attempt:
             time.sleep(2 ** attempt)
         for url in OVERPASS_URLS:
@@ -542,7 +542,35 @@ def _overpass_query(query, timeout, log):
             except Exception as e:
                 last_err = e
                 log(f"    {url.split('/')[2]}: {e}")
-    raise RuntimeError(f"All Overpass servers failed after retries: {last_err}")
+    raise RuntimeError(f"All Overpass servers failed: {last_err}")
+
+
+def _fetch_bbox_ways(bbox, timeout, log, depth=0):
+    """Fetch drivable ways in bbox, subdividing when servers can't cope.
+
+    Dense urban tiles can be too heavy for busy Overpass servers; a query
+    that fails on every server is split into four quadrants (twice at most)
+    - smaller queries succeed where big ones time out.
+    """
+    s, w, n, e = bbox
+    query = (f'[out:json][timeout:{timeout}];'
+             f'way["highway"]["highway"!~"^({OSM_EXCLUDED_HIGHWAYS})$"]'
+             f'["area"!="yes"]({s:.6f},{w:.6f},{n:.6f},{e:.6f});out geom;')
+    try:
+        attempts = 3 if depth >= 2 else 1
+        return _ways_from_elements(_overpass_query(query, timeout, log,
+                                                   attempts=attempts))
+    except RuntimeError:
+        if depth >= 2:
+            raise
+        log(f"    Tile too heavy for the servers right now - "
+            f"splitting into quadrants...")
+        mid_lat, mid_lon = (s + n) / 2, (w + e) / 2
+        ways = []
+        for quadrant in ((s, w, mid_lat, mid_lon), (s, mid_lon, mid_lat, e),
+                         (mid_lat, w, n, mid_lon), (mid_lat, mid_lon, n, e)):
+            ways.extend(_fetch_bbox_ways(quadrant, timeout, log, depth + 1))
+        return ways
 
 
 def _ways_from_elements(elements):
@@ -624,13 +652,10 @@ def fetch_osm_ways(points, cache_dir=OVERPASS_CACHE_DIR, timeout=120, log=print)
         log(f"  Road network loaded from cache ({len(tiles)} tiles)")
 
     for i, (tx, ty, tile_file) in enumerate(to_fetch, start=1):
-        s, w_, n, e = (tx * OSM_TILE_DEG, ty * OSM_TILE_DEG,
-                       (tx + 1) * OSM_TILE_DEG, (ty + 1) * OSM_TILE_DEG)
-        query = (f'[out:json][timeout:{timeout}];'
-                 f'way["highway"]["highway"!~"^({OSM_EXCLUDED_HIGHWAYS})$"]'
-                 f'["area"!="yes"]({s:.6f},{w_:.6f},{n:.6f},{e:.6f});out geom;')
+        bbox = (tx * OSM_TILE_DEG, ty * OSM_TILE_DEG,
+                (tx + 1) * OSM_TILE_DEG, (ty + 1) * OSM_TILE_DEG)
         log(f"  Tile {i}/{len(to_fetch)} ({tx},{ty})...")
-        tile_ways = _ways_from_elements(_overpass_query(query, timeout, log))
+        tile_ways = _fetch_bbox_ways(bbox, timeout, log)
         try:
             with open(tile_file, "w") as f:
                 json.dump({"ways": [
