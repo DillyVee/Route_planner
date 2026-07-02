@@ -5,7 +5,9 @@ Survey Route Planner
 
 Plans an efficient driving route that covers every road section in a KML file
 (e.g. MapPlus/Duweis roadway-survey exports), then writes a mobile-friendly
-GPX track and an interactive HTML map preview.
+GPX track, an interactive HTML map preview, and a Map Plus project (.mpz)
+where every section is its own numbered, tappable feature that keeps its
+CollId — so in the field you can follow the route segment by segment.
 
 How it works
 ------------
@@ -24,7 +26,7 @@ Usage
 -----
     python Route_Planner.py                      # GUI (requires PyQt6)
     python Route_Planner.py sections.kml         # headless CLI
-    python Route_Planner.py sections.kml --no-osm --gpx out.gpx
+    python Route_Planner.py sections.kml --no-osm --gpx out.gpx --mpz out.mpz
 
 Dependencies: none required. Optional: requests (OSM data), PyQt6 (GUI).
 """
@@ -34,9 +36,13 @@ import heapq
 import json
 import os
 import re
+import sqlite3
+import struct
 import sys
 import time
+import uuid
 import webbrowser
+import zipfile
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from math import asin, cos, radians, sin, sqrt
@@ -216,6 +222,8 @@ def parse_kml(kml_path, log=print):
             "oneway": oneway,
             "speed_limit": speed,
             "name": name,
+            "collid": fields.get("collid"),
+            "fields": fields,
         })
 
     if not sections:
@@ -673,6 +681,11 @@ def solve_route(graph, chains, start=None, log=print, progress=None):
             "dist_m": dh_m + chain["length_m"],
             "time_s": dh_s + chain["time_s"],
             "start_index": max(0, len(route) - 1) if route else 0,
+            "chain": ci,
+            "flipped": flipped,
+            "dh_path": dh_path,
+            "dh_m": dh_m,
+            "dh_s": dh_s,
         })
         extend(dh_path)
         extend(coords)
@@ -735,6 +748,309 @@ def write_gpx(route, legs, total, filename):
 
     with open(filename, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
+    return filename
+
+
+# ============================================================================
+# Output: Map Plus project (.mpz)
+# ============================================================================
+#
+# A .mpz is a zip holding a SQLite database (data.sdb) in Map Plus's native
+# schema, matching the state-issued reference exports (PA_2025_Region*.mpz).
+# Each survey section becomes its own tappable line feature that keeps its
+# CollId and other fields, is labeled "[CollId]" on the map, and is named by
+# its position in the driving order, so the feature list reads as the day's
+# task list. Deadhead transfers between runs are separate gray features whose
+# NextCollId points at the segment they lead to.
+
+MPZ_DB_VERSION = "2.8.14"
+MPZ_METADATA_XML = f"""<?xml version="1.0" encoding="UTF-8"?>
+<MetaData>
+  <Version>1.0</Version>
+  <DatabaseVersion>{MPZ_DB_VERSION}</DatabaseVersion>
+  <Description></Description>
+  <RootItemType>70</RootItemType>
+</MetaData>
+"""
+
+# Property schema copied from the reference exports (name, value_type,
+# options); value_type 1=text, 11=integer, 13=decimal. RouteOrder and
+# NextCollId are added so each feature knows its place in the drive order.
+MPZ_PROPERTIES = [
+    ("CollId", 11, None), ("RouteName", 1, None), ("Dir", 1, None),
+    ("Collected", 1, "Yes|No|"), ("LengthFt", 13, None), ("Region", 11, None),
+    ("Juris", 1, None), ("CntyCode", 1, None), ("StRtNo", 1, None),
+    ("SegNo", 1, None), ("BegM", 13, None), ("EndM", 13, None),
+    ("IsPilot", 1, None),
+    ("RouteOrder", 11, None), ("NextCollId", 1, None),
+]
+
+# Style constants lifted from the reference (ARGB ints as decimal strings).
+MPZ_CLASS_STYLE = {211: "1694433535", 213: "6", 220: "1",
+                   221: "[CollId]", 234: "1"}
+MPZ_SEGMENT_LINE = (1677753087, 3.0, 838892287)     # blue, like the reference
+MPZ_DEADHEAD_LINE = (1684300900, 2.0, 845440100)    # translucent gray
+MPZ_TABLE_SQL = [
+    "CREATE TABLE t_sequence(    id       INTEGER  PRIMARY KEY,    sequence INTEGER)",
+    "CREATE TABLE t_item(    id          INTEGER PRIMARY KEY,    guid        TEXT,"
+    "    parent_id   INTEGER,    order_idx   INTEGER,    shortcut_id INTEGER,"
+    "    type        INTEGER,    name        TEXT,    short_name  TEXT,"
+    "    description TEXT,    feature_class_id INTEGER,    icon_id     INTEGER DEFAULT 0,"
+    "    icon_color  INTEGER,    image_id        INTEGER,    show_on_map     INTEGER DEFAULT 1,"
+    "    display_mode    INTEGER,    indicator_index INTEGER,    remind_distance INTEGER,"
+    "    subtype         INTEGER,    style           TEXT,    insert_date     Double,"
+    "    update_date     Double,    access_date     Double)",
+    "CREATE TABLE t_place(    item_id         INTEGER PRIMARY KEY,    type            INTEGER,"
+    "    latitude        Double,    longitude       Double,    coord_type      INTEGER,"
+    "    altitude        Double DEFAULT NULL,    time            Double DEFAULT NULL,"
+    "    icon_scale      Double DEFAULT 1.0,    icon_rotate     Double DEFAULT 0.0,"
+    "    label_color     INTEGER,    label_scale     Double DEFAULT 1.0)",
+    "CREATE TABLE t_shape(    item_id         INTEGER PRIMARY KEY,    coordinates     BLOB,"
+    "    coord_dimension INTEGER,    coord_type      INTEGER,    line_color      INTEGER,"
+    "    line_width      Double,    fill_color      INTEGER,    zorder          INTEGER)",
+    "CREATE TABLE t_tiled_map(    item_id     INTEGER PRIMARY KEY,    zorder      INTEGER,"
+    "    type        INTEGER,    version     TEXT,    min_zoom    INTEGER,"
+    "    max_zoom    INTEGER,    url         TEXT,    invert_y    INTEGER,"
+    "    server_parts     TEXT,    script           TEXT,    background_color INTEGER,"
+    "    x_offset         INTEGER,    y_offset         INTEGER,    scale            Float,"
+    "    alpha            Float,    rotation         Float,    valid_duration   INTEGER,"
+    "    tile_type   TEXT,    tile_conversion INTEGER,    coordinate_type INTEGER,"
+    "    zoom_delta INTEGER,    bounding    BLOB)",
+    "CREATE TABLE t_tiled_map_download_info(    item_id     INTEGER PRIMARY KEY,"
+    "    zooms             TEXT,    shape_type        INTEGER,    shape_data        BLOB,"
+    "    shape_coord_type  INTEGER,    status            INTEGER)",
+    "CREATE TABLE t_image(    id          INTEGER PRIMARY KEY,    mp_id       TEXT,"
+    "    type        INTEGER,    width       INTEGER,    height      INTEGER,"
+    "    color       INTEGER,    scale       Float,    file_type   TEXT,    key         TEXT,"
+    "    hotspot_x   Float,    hotspot_y   Float,    hotspot_xunits INTEGER,"
+    "    hotspot_yunits INTEGER,    markup      BLOB,    reference_id INTEGER,"
+    "    sha1        TEXT,    insert_date Double,    update_date Double)",
+    "CREATE TABLE t_file(    id          INTEGER PRIMARY KEY,    mp_id       TEXT,"
+    "    type        INTEGER,    name        TEXT,    extension   TEXT,    sha1        TEXT,"
+    "    insert_date Double,    update_date Double)",
+    "CREATE TABLE t_text_overlay(    item_id         INTEGER PRIMARY KEY,"
+    "    box_type        INTEGER,    ctype           INTEGER,    text_bounding   BLOB,"
+    "    text_rotation   Double DEFAULT 0.0,    text_scale      Double DEFAULT 1.0,"
+    "    text_color      INTEGER,    halo_color      INTEGER,    fill_color      INTEGER,"
+    "    line_color      INTEGER,    line_width      Double,    target_lat      Double,"
+    "    target_lng      Double)",
+    "CREATE TABLE t_tag(    id          INTEGER PRIMARY KEY,    tag         TEXT,"
+    "    order_idx   INTEGER,    insert_date Double,    update_date Double)",
+    "CREATE TABLE t_property(    id          INTEGER PRIMARY KEY,    feature_class_id INTEGER,"
+    "    order_idx   INTEGER,    name        TEXT,    type        INTEGER,"
+    "    value_type  INTEGER,    options     TEXT,    insert_date Double,    update_date Double)",
+    "CREATE TABLE t_property_lkp(    item_id     INTEGER,    property_id INTEGER,"
+    "    value       BLOB,    Primary Key(item_id, property_id))",
+    "CREATE TABLE t_tag_lkp(    item_id     INTEGER,    tag_id      INTEGER,"
+    "    order_idx   INTEGER,    Primary Key(item_id, tag_id))",
+    "CREATE TABLE t_feature_style_lkp(    item_id     INTEGER,    style       INTEGER,"
+    "    value       TEXT,    Primary Key(item_id, style))",
+    "CREATE TABLE t_link(    id           INTEGER PRIMARY KEY,    type         INTEGER,"
+    "    from_item_id INTEGER,    to_item_id   INTEGER)",
+    "CREATE TABLE t_recent(   content      TEXT,   type         INTEGER,   update_date  Double)",
+    "CREATE TABLE t_version(    version     TEXT,    previous    TEXT,    update_date Double)",
+    "CREATE TABLE t_metadata(    name  TEXT PRIMARY KEY,    value TEXT,    update_date Double)",
+]
+
+
+def build_visits(chains, legs):
+    """Expand the ordered legs into one visit per original KML section.
+
+    Returns [{order, section, reversed, deadhead, time_s, eta_s}] in driving
+    order. `deadhead` ({path, dist_m, time_s}) is set on the first section of
+    a run when a transfer drive precedes it; `reversed` means the section is
+    driven opposite to its digitized coordinate order.
+    """
+    visits = []
+    order = 0
+    elapsed = 0.0
+    for leg in legs:
+        chain = chains[leg["chain"]]
+        parts = chain["parts"][::-1] if leg["flipped"] else chain["parts"]
+        deadhead = None
+        if leg["dh_m"] > 0 and len(leg["dh_path"]) >= 2:
+            deadhead = {"path": leg["dh_path"], "dist_m": leg["dh_m"],
+                        "time_s": leg["dh_s"]}
+        elapsed += leg["dh_s"]
+        for i, (section, part_flipped) in enumerate(parts):
+            order += 1
+            speed = section["speed_limit"] or DEFAULT_SPEED_KMH
+            time_s = section["length_m"] / (speed * 1000.0 / 3600.0)
+            visits.append({
+                "order": order,
+                "section": section,
+                "reversed": part_flipped != leg["flipped"],
+                "deadhead": deadhead if i == 0 else None,
+                "time_s": time_s,
+                "eta_s": elapsed,
+            })
+            elapsed += time_s
+    return visits
+
+
+def _mpz_coords_blob(coords):
+    """Encode a polyline as Map Plus's shape blob (header + lat/lon doubles)."""
+    return (b"\x01\x00\x01\x02" + struct.pack("<ii", len(coords), 0)
+            + b"".join(struct.pack("<dd", lat, lon) for lat, lon in coords))
+
+
+def write_mpz(visits, total, filename, title="Survey Route"):
+    """Write the planned route as a Map Plus project archive (.mpz)."""
+    now = time.time()
+    guid_base = uuid.uuid4().hex[:10].upper()
+    guid_n = 0
+
+    def guid():
+        nonlocal guid_n
+        guid_n += 1
+        return f"RP{guid_base}L{guid_n}"
+
+    db_path = filename + ".sdb.tmp"
+    if os.path.exists(db_path):
+        os.remove(db_path)
+    con = sqlite3.connect(db_path)
+    for sql in MPZ_TABLE_SQL:
+        con.execute(sql)
+
+    def add_item(item_id, parent_id, order_idx, item_type, name, **kw):
+        row = {"id": item_id, "guid": guid(), "parent_id": parent_id,
+               "order_idx": order_idx, "type": item_type, "name": name,
+               "remind_distance": 0, "insert_date": now, "update_date": now}
+        row.update(kw)
+        cols = ", ".join(row)
+        con.execute(f"INSERT INTO t_item({cols}) VALUES({', '.join('?' * len(row))})",
+                    list(row.values()))
+
+    def add_props(item_id, values):
+        for pid, value in values:
+            blob = value.encode("utf-8") if isinstance(value, str) else value
+            con.execute("INSERT INTO t_property_lkp(item_id, property_id, value) "
+                        "VALUES(?,?,?)", (item_id, pid, blob))
+
+    def add_styles(item_id, styles):
+        con.executemany("INSERT INTO t_feature_style_lkp(item_id, style, value) "
+                        "VALUES(?,?,?)", [(item_id, k, v) for k, v in styles.items()])
+
+    # --- Feature class (type 2001) with its properties and display rules ----
+    fc_id = 10001
+    today = datetime.now()
+    add_item(fc_id, 1, 1, 2001, title,
+             description=f"{today:%b} {today.day}, {today.year}",
+             icon_id=0, subtype=2)
+    add_styles(fc_id, MPZ_CLASS_STYLE)
+
+    prop_ids = {}
+    for i, (pname, value_type, options) in enumerate(MPZ_PROPERTIES, start=1):
+        pid = 10000 + i
+        prop_ids[pname.lower()] = pid
+        con.execute("INSERT INTO t_property(id, feature_class_id, order_idx, name, "
+                    "type, value_type, options, insert_date, update_date) "
+                    "VALUES(?,?,?,?,2,?,?,?,?)",
+                    (pid, fc_id, i, pname, value_type, options, now, now))
+    # Template rows the reference carries on the feature-class item itself.
+    add_props(fc_id, [(2, None)] + [(pid, None) for pid in
+                                    sorted(prop_ids.values())])
+
+    # Conditional display rules (type 2002), same mechanism as the reference:
+    # gray out deadhead transfers; fade segments once Collected is set to Yes.
+    add_item(10002, fc_id, 1, 2002, "Deadhead")
+    add_props(10002, [(600, '[RouteName]=="Deadhead"')])
+    add_styles(10002, {210: "2", 211: str(MPZ_DEADHEAD_LINE[0]), 212: "0.5"})
+    add_item(10003, fc_id, 2, 2002, "Collected")
+    add_props(10003, [(600, '[Collected].beginswith("Y")')])
+    add_styles(10003, {210: "2", 211: "1677721600", 212: "0.2972973",
+                       220: "0", 234: "0"})
+
+    # --- Feature collection (type 70) holding one feature per visit ---------
+    coll_id = 10004
+    survey_km = total["survey_m"] / 1000
+    deadhead_km = total["deadhead_m"] / 1000
+    hours = (total["survey_s"] + total["deadhead_s"]) / 3600
+    add_item(coll_id, 1, 2, 70, title,
+             description=f"{len(visits)} segments in driving order | "
+                         f"{survey_km:.1f} km survey + {deadhead_km:.1f} km "
+                         f"deadhead | est. {hours:.1f} h",
+             feature_class_id=fc_id, show_on_map=1, display_mode=0, subtype=2)
+    add_props(coll_id, [(700, struct.pack("<i", 0)), (701, struct.pack("<i", 25)),
+                        (702, struct.pack("<i", 0))])
+
+    def add_shape(item_id, coords, line):
+        con.execute("INSERT INTO t_shape(item_id, coordinates, coord_dimension, "
+                    "coord_type, line_color, line_width, fill_color, zorder) "
+                    "VALUES(?,?,1,0,?,?,?,0)",
+                    (item_id, _mpz_coords_blob(coords), line[0], line[1], line[2]))
+
+    item_id = coll_id
+    order_idx = 0
+    width = max(4, len(str(len(visits))))
+    for vi, visit in enumerate(visits):
+        section = visit["section"]
+        collid = section["collid"] or section["name"]
+        nxt = visits[vi + 1]["section"] if vi + 1 < len(visits) else None
+        next_collid = (nxt["collid"] or nxt["name"]) if nxt else None
+        label = str(visit["order"]).zfill(width)
+
+        if visit["deadhead"]:
+            dh = visit["deadhead"]
+            item_id += 1
+            order_idx += 1
+            add_item(item_id, coll_id, order_idx, 3, f"→ {label}",
+                     description=f"Transfer {dh['dist_m'] / 1000:.2f} km "
+                                 f"(~{dh['time_s'] / 60:.0f} min) to segment "
+                                 f"{label} (CollId {collid})",
+                     feature_class_id=fc_id, display_mode=1)
+            add_shape(item_id, dh["path"], MPZ_DEADHEAD_LINE)
+            add_props(item_id, [
+                (prop_ids["routename"], "Deadhead"),
+                (prop_ids["lengthft"], f"{dh['dist_m'] * 3.28084:.1f}"),
+                (prop_ids["routeorder"], str(visit["order"])),
+                (prop_ids["nextcollid"], str(collid)),
+            ])
+
+        item_id += 1
+        order_idx += 1
+        desc = (f"Run {visit['order']} of {len(visits)} | "
+                f"{section['length_m'] / 1000:.2f} km | ETA +{visit['eta_s'] / 3600:.1f} h")
+        if visit["reversed"]:
+            desc += " | drive opposite to digitized direction"
+        if next_collid is not None:
+            desc += f" | next: CollId {next_collid}"
+        add_item(item_id, coll_id, order_idx, 3, f"{label} · {collid}",
+                 description=desc, feature_class_id=fc_id, display_mode=1)
+        add_shape(item_id, section["coords"], MPZ_SEGMENT_LINE)
+
+        values = [(2, section["fields"].get("routename"))]
+        seen = set()
+        for fname, value in section["fields"].items():
+            pid = prop_ids.get(fname)
+            if pid and fname not in ("routeorder", "nextcollid"):
+                values.append((pid, value))
+                seen.add(fname)
+        if "collid" not in seen:
+            values.append((prop_ids["collid"], str(collid)))
+        if "collected" not in seen:
+            values.append((prop_ids["collected"], "No"))
+        values.append((prop_ids["routeorder"], str(visit["order"])))
+        values.append((prop_ids["nextcollid"],
+                       str(next_collid) if next_collid is not None else None))
+        add_props(item_id, values)
+
+    # --- Bookkeeping tables --------------------------------------------------
+    con.executemany("INSERT INTO t_sequence(id, sequence) VALUES(?,?)",
+                    [(1, item_id + 1), (2, 10001),
+                     (3, 10001 + len(MPZ_PROPERTIES)),
+                     (4, 10001), (5, 10001), (6, 10001)])
+    con.execute("INSERT INTO t_version(version, previous, update_date) VALUES(?,?,?)",
+                (MPZ_DB_VERSION, None, now))
+    con.execute("INSERT INTO t_metadata(name, value, update_date) VALUES(?,?,?)",
+                ("version", MPZ_DB_VERSION, now))
+    con.commit()
+    con.close()
+
+    with zipfile.ZipFile(filename, "w", zipfile.ZIP_DEFLATED) as z:
+        z.write(db_path, "data.sdb")
+        z.writestr(".com.miocool.mapplus.metadata/metadata.xml", MPZ_METADATA_XML)
+    os.remove(db_path)
     return filename
 
 
@@ -809,9 +1125,9 @@ map.fitBounds(line.getBounds().pad(0.05));
 # ============================================================================
 
 def plan_route(kml_path, use_osm=True, start=None, output_gpx="survey_route.gpx",
-               output_html="route_preview.html", cache_file=OVERPASS_CACHE_FILE,
-               log=print, step=None, progress=None):
-    """Full pipeline: KML -> optimized route -> GPX + HTML. Returns results dict."""
+               output_html="route_preview.html", output_mpz="survey_route.mpz",
+               cache_file=OVERPASS_CACHE_FILE, log=print, step=None, progress=None):
+    """Full pipeline: KML -> optimized route -> GPX + HTML + MPZ. Returns results dict."""
     t0 = time.time()
 
     def stage(n, msg):
@@ -845,6 +1161,11 @@ def plan_route(kml_path, use_osm=True, start=None, output_gpx="survey_route.gpx"
     write_html(route, legs, total, output_html)
     log(f"  GPX: {output_gpx}")
     log(f"  Map: {output_html}")
+    if output_mpz:
+        visits = build_visits(chains, legs)
+        title = os.path.splitext(os.path.basename(kml_path))[0] + "_route"
+        write_mpz(visits, total, output_mpz, title=title)
+        log(f"  MPZ: {output_mpz} ({len(visits)} ordered segments for Map Plus)")
 
     km = (total["survey_m"] + total["deadhead_m"]) / 1000
     hours = (total["survey_s"] + total["deadhead_s"]) / 3600
@@ -852,7 +1173,8 @@ def plan_route(kml_path, use_osm=True, start=None, output_gpx="survey_route.gpx"
     log(f"Route: {km:.1f} km total ({total['survey_m'] / 1000:.1f} survey + "
         f"{total['deadhead_m'] / 1000:.1f} deadhead), est. {hours:.1f} h driving")
 
-    return {"gpx": output_gpx, "html": output_html, "route": route, "legs": legs,
+    return {"gpx": output_gpx, "html": output_html, "mpz": output_mpz,
+            "route": route, "legs": legs,
             "total_m": total["survey_m"] + total["deadhead_m"],
             "total_s": total["survey_s"] + total["deadhead_s"],
             "survey_m": total["survey_m"], "deadhead_m": total["deadhead_m"],
@@ -890,6 +1212,7 @@ def run_gui():
                     use_osm=self.params["use_osm"],
                     output_gpx=self.params["gpx"],
                     output_html=self.params["html"],
+                    output_mpz=self.params["mpz"],
                     log=self.message.emit,
                     step=self.stepped.emit,
                     progress=self.solved.emit,
@@ -926,10 +1249,13 @@ def run_gui():
             out_row = QHBoxLayout()
             self.gpx_edit = QLineEdit("survey_route.gpx")
             self.html_edit = QLineEdit("route_preview.html")
+            self.mpz_edit = QLineEdit("survey_route.mpz")
             out_row.addWidget(QLabel("GPX:"))
             out_row.addWidget(self.gpx_edit, 1)
             out_row.addWidget(QLabel("Map:"))
             out_row.addWidget(self.html_edit, 1)
+            out_row.addWidget(QLabel("MPZ:"))
+            out_row.addWidget(self.mpz_edit, 1)
             layout.addLayout(out_row)
 
             self.osm_check = QCheckBox(
@@ -995,6 +1321,7 @@ def run_gui():
                 "use_osm": self.osm_check.isChecked(),
                 "gpx": self.gpx_edit.text().strip() or "survey_route.gpx",
                 "html": self.html_edit.text().strip() or "route_preview.html",
+                "mpz": self.mpz_edit.text().strip() or "survey_route.mpz",
             })
             self.worker.message.connect(self.log)
             self.worker.stepped.connect(self.bar.setValue)
@@ -1052,6 +1379,8 @@ def main():
     parser.add_argument("kml", nargs="?", help="KML file (omit to launch the GUI)")
     parser.add_argument("--gpx", default="survey_route.gpx", help="output GPX file")
     parser.add_argument("--html", default="route_preview.html", help="output HTML map")
+    parser.add_argument("--mpz", default="survey_route.mpz",
+                        help="output Map Plus project (.mpz); pass '' to skip")
     parser.add_argument("--no-osm", action="store_true",
                         help="skip OpenStreetMap fetch (offline mode)")
     parser.add_argument("--start", metavar="LAT,LON",
@@ -1075,7 +1404,7 @@ def main():
             parser.error("--start must be LAT,LON")
 
     plan_route(args.kml, use_osm=not args.no_osm, start=start,
-               output_gpx=args.gpx, output_html=args.html)
+               output_gpx=args.gpx, output_html=args.html, output_mpz=args.mpz)
 
 
 if __name__ == "__main__":

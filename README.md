@@ -2,7 +2,8 @@
 
 Plans an efficient driving route that covers every road section in a KML file
 (MapPlus/Duweis roadway-survey exports or generic KML), then writes a
-mobile-friendly **GPX** track and an interactive **HTML map** preview.
+mobile-friendly **GPX** track, an interactive **HTML map** preview, and a
+native **Map Plus project (.mpz)** built for the field workflow.
 
 Everything lives in one file: `Route_Planner.py`.
 
@@ -17,7 +18,7 @@ pip install -r requirements.txt   # requests (OSM data) + PyQt6 (GUI) — both o
 ```bash
 python Route_Planner.py                     # GUI
 python Route_Planner.py sections.kml       # headless CLI
-python Route_Planner.py sections.kml --no-osm --gpx out.gpx --start 40.44,-79.99
+python Route_Planner.py sections.kml --no-osm --gpx out.gpx --mpz out.mpz --start 40.44,-79.99
 ```
 
 Try it: `python Route_Planner.py sample.kml --no-osm`
@@ -43,6 +44,28 @@ Try it: `python Route_Planner.py sample.kml --no-osm`
 
 Sections with no road connection at all are joined by straight-line jumps and
 reported with a warning.
+
+## Map Plus output (.mpz)
+
+`survey_route.mpz` imports straight into Map Plus and matches the structure of
+the state-issued region files: one line feature per original KML section, in a
+feature collection sorted by driving order, keeping every field (`CollId`,
+`RouteName`, `Dir`, `Collected`, ...) and labeled `[CollId]` on the map.
+
+Field workflow:
+
+- Features are named `0001 · <CollId>`, `0002 · <CollId>`, ... so the feature
+  list is the day's ordered task list, and tapping any segment shows its
+  CollId, run number, length, ETA, and the CollId of the **next** segment
+  (also stored in the `RouteOrder` / `NextCollId` properties).
+- Transfers between runs appear as thin gray `→ 0042` features drawn along
+  the actual connecting roads, telling you how to reach the next segment and
+  which CollId comes next.
+- Set `Collected` to `Yes` as you finish each segment and it fades out on the
+  map (same conditional-style trick as the reference files), so the bright
+  segments are always what's left to do.
+- Segments that must be driven opposite to their digitized direction say so
+  in their description.
 
 ## Input format
 
