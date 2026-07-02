@@ -16,6 +16,12 @@ the planned days can hold, runs close to the hotel are left unplanned as
 safe end-of-shift filler - far-away segments always stay inside a planned,
 time-boxed day so you are never stranded far out when the shift ends.
 
+Hours are computed from observed field pace, not map speed limits (rural
+roads mostly have no posted limit in OSM and would look far slower than
+reality): --collect-mph (default 30) while collecting and --transfer-mph
+(default 45) on deadhead. At those defaults a 6 h day holds roughly
+180-220 mi of driving; tune both to match your own daily logs.
+
 How the balance works
 ---------------------
 1. Segments are grouped into continuous runs (chains) and swept by compass
@@ -73,6 +79,13 @@ DAY_COLORS = ["#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4",
 # transfers + the drive out and back); only used to size the initial day
 # count - the real cap is enforced on solved routes.
 COLLECTION_SHARE = 0.6
+# Real-world pace used to turn route miles into shift hours. Posted speed
+# limits are a bad predictor of a field day (most rural OSM roads carry no
+# limit at all and fall back to slow class defaults), so day length is
+# estimated from these observed averages instead - tune them with
+# --collect-mph / --transfer-mph to match your own logs.
+COLLECT_MPH = 30.0    # average while collecting segments
+TRANSFER_MPH = 45.0   # average on deadhead between segments / to the hotel
 
 
 # ============================================================================
@@ -184,8 +197,12 @@ def sweep_partition(chains, hotel, days):
 # Per-day routing (hotel -> wedge -> hotel)
 # ============================================================================
 
-def solve_day(graph, chains, group, hotel):
-    """Route one day: from the hotel through its runs and back."""
+def solve_day(graph, chains, group, hotel, pace):
+    """Route one day: from the hotel through its runs and back.
+
+    `pace` is (collect_mph, transfer_mph); the day's shift hours come from
+    those observed averages, not from map speed limits.
+    """
     day_chains = [chains[ci] for ci in group]
     route, legs, total = solve_route(graph, day_chains, start=hotel,
                                      log=lambda *a: None)
@@ -204,6 +221,8 @@ def solve_day(graph, chains, group, hotel):
         ret_path = [route[-1], hotel]
         total["jumps"] += 1
 
+    survey_mi = total["survey_m"] * MILES_PER_M
+    deadhead_mi = (total["deadhead_m"] + ret_m) * MILES_PER_M
     full_route = route + ret_path[1:]
     return {
         "group": group,
@@ -214,6 +233,7 @@ def solve_day(graph, chains, group, hotel):
         "return_path": ret_path,
         "return_m": ret_m,
         "return_s": ret_s,
+        "hours": survey_mi / pace[0] + deadhead_mi / pace[1],
         "wrong_way_return": wrong_way_return,
     }
 
@@ -231,11 +251,10 @@ def day_total_mi(day):
 
 
 def day_hours(day):
-    t = day["total"]
-    return (t["survey_s"] + t["deadhead_s"] + day["return_s"]) / 3600
+    return day["hours"]
 
 
-def rebalance(graph, chains, groups, solved, hotel, log, max_moves=10):
+def rebalance(graph, chains, groups, solved, hotel, pace, log, max_moves=10):
     """Even out the days on their true driving time.
 
     Shifts a boundary run from the heaviest day into the angularly adjacent
@@ -274,8 +293,8 @@ def rebalance(graph, chains, groups, solved, hotel, log, max_moves=10):
             ci = groups[src][pos]
             new_src = [c for c in groups[src] if c != ci]
             new_dst = ([ci] + groups[dst]) if pos == -1 else (groups[dst] + [ci])
-            trial_src = solve_day(graph, chains, new_src, hotel)
-            trial_dst = solve_day(graph, chains, new_dst, hotel)
+            trial_src = solve_day(graph, chains, new_src, hotel, pace)
+            trial_dst = solve_day(graph, chains, new_dst, hotel, pace)
             trial_hours = list(hours)
             trial_hours[src] = day_hours(trial_src)
             trial_hours[dst] = day_hours(trial_dst)
@@ -294,7 +313,7 @@ def rebalance(graph, chains, groups, solved, hotel, log, max_moves=10):
     return groups, solved
 
 
-def trim_to_shift(graph, chains, groups, solved, hotel, max_hours, log):
+def trim_to_shift(graph, chains, groups, solved, hotel, pace, max_hours, log):
     """Shed work from days that exceed the shift until they fit.
 
     Runs closest to the hotel are dropped first: they are the safe ones to
@@ -310,7 +329,7 @@ def trim_to_shift(graph, chains, groups, solved, hotel, max_hours, log):
                      key=lambda c: haversine(hotel, _centroid(chains[c])))
             groups[di].remove(ci)
             filler.append(ci)
-            solved[di] = solve_day(graph, chains, groups[di], hotel)
+            solved[di] = solve_day(graph, chains, groups[di], hotel, pace)
         if day_hours(solved[di]) > max_hours:
             log(f"  WARNING: day {di + 1} is a single run that alone takes "
                 f"{day_hours(solved[di]):.1f} h - it cannot fit the "
@@ -327,9 +346,11 @@ def trim_to_shift(graph, chains, groups, solved, hotel, max_hours, log):
 # Reporting + outputs
 # ============================================================================
 
-def print_plan(solved, max_hours, min_miles, filler_info, log=print):
+def print_plan(solved, max_hours, min_miles, filler_info, pace, log=print):
     log("\n" + "=" * 64)
     log("MULTI-DAY PLAN")
+    log(f"(hours assume {pace[0]:.0f} mph collecting / {pace[1]:.0f} mph "
+        f"transfers - tune with --collect-mph / --transfer-mph)")
     log("=" * 64)
     for n, day in enumerate(solved, start=1):
         total_mi = day_total_mi(day)
@@ -448,7 +469,9 @@ if (bounds) map.fitBounds(bounds.pad(0.05));
 
 def plan_days(input_path, hotel_text, max_hours=6.0, min_miles=None,
               days=None, lock=None, out_dir="daily_plan", use_osm=True,
+              collect_mph=COLLECT_MPH, transfer_mph=TRANSFER_MPH,
               cache_dir=OVERPASS_CACHE_DIR, log=print):
+    pace = (collect_mph, transfer_mph)
     hotel = resolve_hotel(hotel_text, log=log)
     log(f"  Hotel position: {hotel[0]:.5f}, {hotel[1]:.5f}")
 
@@ -489,22 +512,24 @@ def plan_days(input_path, hotel_text, max_hours=6.0, min_miles=None,
                         log=log)
     link_hotel(graph, hotel, log=log)
 
-    # Size the plan in shift-hours: collection time is known, transfers are
-    # assumed to take the rest of each day (~40%); the true cap is enforced
-    # on the solved routes below.
-    total_survey_h = sum(c["time_s"] for c in chains) / 3600
+    # Size the plan in shift-hours at the observed collection pace;
+    # transfers are assumed to take the rest of each day (~40%); the true
+    # cap is enforced on the solved routes below.
     total_survey_mi = sum(s["length_m"] for s in todo) * MILES_PER_M
+    total_survey_h = total_survey_mi / collect_mph
     max_days = days or 5
     if days is None:
         days = max(1, min(max_days,
                           ceil(total_survey_h / (max_hours * COLLECTION_SHARE))))
     log(f"\n[4/5] Planning {days} day(s): {total_survey_mi:.0f} mi "
         f"(~{total_survey_h:.1f} h) of collection, "
-        f"{max_hours:.1f} h driving per shift...")
+        f"{max_hours:.1f} h driving per shift "
+        f"(pace: {collect_mph:.0f} mph collecting, "
+        f"{transfer_mph:.0f} mph transfers)...")
 
     groups = sweep_partition(chains, hotel, days)
-    solved = [solve_day(graph, chains, g, hotel) for g in groups]
-    groups, solved = rebalance(graph, chains, groups, solved, hotel, log)
+    solved = [solve_day(graph, chains, g, hotel, pace) for g in groups]
+    groups, solved = rebalance(graph, chains, groups, solved, hotel, pace, log)
 
     # If the days run over the shift and we may add another day, do that
     # first (keeps everything planned); only then trim to the cap.
@@ -514,12 +539,15 @@ def plan_days(input_path, hotel_text, max_hours=6.0, min_miles=None,
         log(f"  Days exceed the {max_hours:.1f} h shift - "
             f"replanning with {days} day(s)")
         groups = sweep_partition(chains, hotel, days)
-        solved = [solve_day(graph, chains, g, hotel) for g in groups]
-        groups, solved = rebalance(graph, chains, groups, solved, hotel, log)
+        solved = [solve_day(graph, chains, g, hotel, pace) for g in groups]
+        groups, solved = rebalance(graph, chains, groups, solved, hotel,
+                                   pace, log)
 
-    filler = trim_to_shift(graph, chains, groups, solved, hotel, max_hours, log)
+    filler = trim_to_shift(graph, chains, groups, solved, hotel, pace,
+                           max_hours, log)
     if filler:
-        groups, solved = rebalance(graph, chains, groups, solved, hotel, log)
+        groups, solved = rebalance(graph, chains, groups, solved, hotel,
+                                   pace, log)
 
     jumps = sum(d["total"]["jumps"] for d in solved)
     if jumps:
@@ -532,7 +560,7 @@ def plan_days(input_path, hotel_text, max_hours=6.0, min_miles=None,
         filler_mi = sum(c["length_m"] for c in filler_chains) * MILES_PER_M
         n_seg = sum(len(c["parts"]) for c in filler_chains)
         filler_info = f"{n_seg} segments, {filler_mi:.0f} mi near the hotel"
-    print_plan(solved, max_hours, min_miles, filler_info, log=log)
+    print_plan(solved, max_hours, min_miles, filler_info, pace, log=log)
 
     log("\n[5/5] Writing outputs...")
     os.makedirs(out_dir, exist_ok=True)
@@ -544,7 +572,9 @@ def plan_days(input_path, hotel_text, max_hours=6.0, min_miles=None,
         visits = build_visits(day["chains"], day["legs"])
         total = dict(day["total"])
         total["deadhead_m"] += day["return_m"]
-        total["deadhead_s"] += day["return_s"]
+        # Report times at the observed pace, not map speed limits.
+        total["survey_s"] = day_survey_mi(day) / collect_mph * 3600
+        total["deadhead_s"] = day_deadhead_mi(day) / transfer_mph * 3600
         mpz = os.path.join(out_dir, f"day_{n}.mpz")
         gpx = os.path.join(out_dir, f"day_{n}.gpx")
         write_mpz(visits, total, mpz, title=f"Day {n} route",
@@ -596,6 +626,13 @@ def main():
     parser.add_argument("--hours", type=float, default=6.0,
                         help="max driving hours per day (default 6.0 - "
                              "leaves wiggle room in an 8 h shift)")
+    parser.add_argument("--collect-mph", type=float, default=COLLECT_MPH,
+                        help=f"your average speed while collecting segments "
+                             f"(default {COLLECT_MPH:.0f})")
+    parser.add_argument("--transfer-mph", type=float, default=TRANSFER_MPH,
+                        help=f"your average speed on transfers between "
+                             f"segments and to/from the hotel "
+                             f"(default {TRANSFER_MPH:.0f})")
     parser.add_argument("--min-miles", type=float, default=None,
                         help="optional: flag any route under this many total "
                              "miles (balance itself is driven by --hours)")
@@ -614,7 +651,8 @@ def main():
 
     plan_days(args.segments, args.hotel, max_hours=args.hours,
               min_miles=args.min_miles, days=args.days, lock=args.lock,
-              out_dir=args.out_dir, use_osm=not args.no_osm)
+              out_dir=args.out_dir, use_osm=not args.no_osm,
+              collect_mph=args.collect_mph, transfer_mph=args.transfer_mph)
 
 
 if __name__ == "__main__":

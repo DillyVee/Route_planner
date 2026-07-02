@@ -139,6 +139,12 @@ CollId 123 blue / with the arrows, `456D` = pink / against them).
 `--min-miles` is optional and only flags routes under the threshold —
 balance is driven by time.
 
+Shift hours come from **your observed pace**, not map speed limits (rural
+roads mostly carry no posted limit in OSM and would look far slower than
+reality): `--collect-mph` (default 30) while collecting and
+`--transfer-mph` (default 45) on deadhead. At the defaults a 6 h day holds
+roughly 180–220 mi of driving; tune both to match your daily logs.
+
 Outputs (in `--out-dir`, default `daily_plan/`):
 
 - `day_N.mpz` / `day_N.gpx` — one complete hotel-to-hotel route per day.
