@@ -18,9 +18,9 @@ time-boxed day so you are never stranded far out when the shift ends.
 
 Hours are computed from observed field pace, not map speed limits (rural
 roads mostly have no posted limit in OSM and would look far slower than
-reality): --collect-mph (default 30) while collecting and --transfer-mph
-(default 45) on deadhead. At those defaults a 6 h day holds roughly
-180-220 mi of driving; tune both to match your own daily logs.
+reality): 35 mph while collecting (rural roads) and 45 mph on deadhead.
+At that pace a 6 h day holds roughly 200-250 mi of driving. No tuning
+needed; --collect-mph / --transfer-mph exist only for unusual regions.
 
 How the balance works
 ---------------------
@@ -82,9 +82,10 @@ COLLECTION_SHARE = 0.6
 # Real-world pace used to turn route miles into shift hours. Posted speed
 # limits are a bad predictor of a field day (most rural OSM roads carry no
 # limit at all and fall back to slow class defaults), so day length is
-# estimated from these observed averages instead - tune them with
-# --collect-mph / --transfer-mph to match your own logs.
-COLLECT_MPH = 30.0    # average while collecting segments
+# estimated from these observed averages instead. Rural collection roads
+# run 35 mph; no tuning needed, but --collect-mph / --transfer-mph can
+# override if a region drives differently.
+COLLECT_MPH = 35.0    # average while collecting segments (rural roads)
 TRANSFER_MPH = 45.0   # average on deadhead between segments / to the hotel
 
 

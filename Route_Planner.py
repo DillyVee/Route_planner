@@ -81,11 +81,13 @@ OSM_EXCLUDED_HIGHWAYS = ("footway|path|cycleway|steps|pedestrian|bridleway|"
                          "corridor|platform|proposed|construction|abandoned|"
                          "razed|raceway|escape|busway")
 
-# Fallback speeds (km/h) by OSM highway classification.
+# Fallback speeds (km/h) by OSM highway classification, for roads with no
+# posted limit mapped. Rural collection roads (tertiary/unclassified/
+# residential out here) really drive at ~35 mph (56 km/h).
 HIGHWAY_SPEEDS = {
     "motorway": 110, "motorway_link": 80, "trunk": 90, "trunk_link": 70,
     "primary": 70, "primary_link": 50, "secondary": 60, "secondary_link": 50,
-    "tertiary": 50, "tertiary_link": 40, "unclassified": 40, "residential": 30,
+    "tertiary": 56, "tertiary_link": 45, "unclassified": 56, "residential": 56,
     "living_street": 20, "service": 20, "track": 15,
 }
 
